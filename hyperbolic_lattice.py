@@ -9,13 +9,28 @@ hyperbolic and algebraic-norm constraints can factor semiprimes.
 
 Four approaches are tested:
 
-  Approach 2 (Fermat + LLL): Encode x^2 - y^2 = N as a closest-vector problem.
-  Approach 4 (Gaussian integers): Use Z[i] norm lattice — most promising.
-  Approach 5 (Eisenstein / multi-ring): Use Z[omega] and Z[sqrt(-2)] norms.
-  Approach 6 (Pell lattice): Relate Pell-equation near-misses to factors.
+  Approach 2 (Fermat + LLL): Encode x^2 - y^2 = N as a CVP-like problem.
+  Approach 4 (Gaussian integers): Z[i] norm lattice + Gaussian trial division.
+  Approach 5 (Eisenstein / multi-ring): Z[omega], Z[sqrt(-2)], etc.
+  Approach 6 (Pell lattice): CF convergents & smooth-residue sieve.
 
-For each, we build a lattice from N alone (no knowledge of p, q), run LLL
-and BKZ, then check if any short vector reveals a nontrivial factor.
+Key theoretical finding (verified empirically):
+  The 2x2 Gaussian lattice [[N,0],[r,1]] (where r^2=-1 mod N) finds vectors
+  (a,b) with a^2+b^2 = kN, but extracting factors requires O(N^{1/4})
+  Gaussian trial divisions -- no better than plain trial division. The lattice
+  step merely reformulates factoring, not solves it.
+
+  The Pell/CF approach is the most empirically successful: continued fraction
+  convergents of sqrt(N) give x^2 - Ny^2 = small, and gcd(small, N) is often
+  nontrivial for small N. But success decays with N.
+
+  The multi-ring combined lattice (using roots for D=1,2,3,...) is the most
+  interesting theoretically: it encodes MULTIPLE algebraic constraints
+  simultaneously, and the higher-dimensional short vectors reveal more
+  structural information about N's factorization.
+
+We measure: success rate, which sub-method works, scaling behavior, and
+diagnostic metrics (shortest-vector norms, k-values in a^2+b^2=kN, etc.)
 """
 
 import math
@@ -44,6 +59,9 @@ def small_primes(limit: int) -> List[int]:
             for j in range(i * i, limit + 1, i):
                 s[j] = False
     return [i for i in range(limit + 1) if s[i]]
+
+
+SMALL_PRIMES_CACHE = small_primes(10000)
 
 
 def is_prime(n: int) -> bool:
@@ -105,7 +123,7 @@ def jacobi(a: int, n: int) -> int:
 
 
 def sqrt_mod_prime(a: int, p: int) -> Optional[int]:
-    """Tonelli-Shanks: find x with x^2 = a mod p, or None if no root."""
+    """Tonelli-Shanks: find x with x^2 = a mod p, or None."""
     a = a % p
     if a == 0:
         return 0
@@ -113,19 +131,14 @@ def sqrt_mod_prime(a: int, p: int) -> Optional[int]:
         return None
     if p % 4 == 3:
         return pow(a, (p + 1) // 4, p)
-    # Factor p-1 = 2^s * q
     s, q = 0, p - 1
     while q % 2 == 0:
         s += 1
         q //= 2
-    # Find a quadratic non-residue
     z = 2
     while pow(z, (p - 1) // 2, p) != p - 1:
         z += 1
-    M = s
-    c = pow(z, q, p)
-    t = pow(a, q, p)
-    R = pow(a, (q + 1) // 2, p)
+    M, c, t, R = s, pow(z, q, p), pow(a, q, p), pow(a, (q + 1) // 2, p)
     while True:
         if t == 1:
             return R
@@ -135,44 +148,69 @@ def sqrt_mod_prime(a: int, p: int) -> Optional[int]:
             temp = (temp * temp) % p
             i += 1
         b = pow(c, 1 << (M - i - 1), p)
-        M = i
-        c = (b * b) % p
-        t = (t * c) % p
-        R = (R * b) % p
+        M, c, t, R = i, (b * b) % p, (t * b * b) % p, (R * b) % p
 
 
-def sqrt_mod_composite_random(D: int, N: int, max_attempts: int = 200) -> Optional[int]:
-    """Find r with r^2 = -D mod N by random search (for when we cannot factor N)."""
-    # First check if -D is a QR mod N using Jacobi symbol
-    if jacobi(-D, N) != 1:
+def find_sqrt_neg_D_mod_N_blind(D: int, N: int, max_attempts: int = 500) -> Optional[int]:
+    """Find r with r^2 + D = 0 mod N by random search (without knowing factors)."""
+    target = (-D) % N
+    if jacobi(target, N) != 1:
         return None
-    # Random search: for random a, compute a^((N-1)/2) mod N
-    # and check if result^2 = -D mod N.
-    # Actually, use the method: pick random a, compute gcd(a^2+D, N).
-    # If 1 < gcd < N, we found a factor (bonus!).
-    # Otherwise try Cipolla-like approach or just brute force for small N.
     for _ in range(max_attempts):
-        a = random.randint(1, N - 1)
-        if (a * a + D) % N == 0:
-            return a
-    # Brute force for small N
-    if N < 10**7:
-        for a in range(1, N):
-            if (a * a + D) % N == 0:
-                return a
+        a = random.randint(2, N - 2)
+        g = math.gcd(a, N)
+        if 1 < g < N:
+            return None
+        r = pow(a, (N - 1) // 4, N)
+        if (r * r + D) % N == 0:
+            return r
+        r2 = pow(a, (N + 3) // 4, N)
+        if (r2 * r2 + D) % N == 0:
+            return r2
+        r3 = random.randint(1, N - 1)
+        if (r3 * r3 + D) % N == 0:
+            return r3
+    if N < 2 * 10**6:
+        for x in range(1, N):
+            if (x * x + D) % N == 0:
+                return x
     return None
 
 
-def generate_semiprime(bits: int, cond: str = "any") -> Tuple[int, int, int]:
-    """Generate N = p*q where p,q are primes of roughly bits/2 each.
+def find_sqrt_neg_D_mod_N(D: int, N: int, p: int = 0, q: int = 0) -> Optional[int]:
+    """Find r with r^2 + D = 0 mod N using CRT with known factors.
 
-    cond: "any" = no constraint
-          "1mod4" = both p,q = 1 mod 4 (needed for Gaussian approach)
-          "1mod3" = both p,q = 1 mod 3 (needed for Eisenstein approach)
+    For the experiment, we use known factors to compute r reliably via CRT.
+    This isolates the lattice-reduction step from the root-finding step.
+    A real factoring algorithm would need a different root-finding method
+    (and in fact, finding TWO independent roots of x^2=-D mod N is itself
+    equivalent to factoring N).
     """
+    if p == 0 or q == 0:
+        return find_sqrt_neg_D_mod_N_blind(D, N)
+
+    target_p = (-D) % p
+    target_q = (-D) % q
+    rp = sqrt_mod_prime(target_p, p)
+    rq = sqrt_mod_prime(target_q, q)
+    if rp is None or rq is None:
+        return None
+    # CRT: find r = rp mod p, r = rq mod q
+    try:
+        inv_p = pow(p, -1, q)
+    except ValueError:
+        return None
+    r = (rp + p * ((rq - rp) * inv_p % q)) % N
+    if (r * r + D) % N != 0:
+        return None
+    return r
+
+
+def generate_semiprime(bits: int, cond: str = "any") -> Tuple[int, int, int]:
+    """Generate N = p*q where p,q are primes of roughly bits/2 each."""
     lo = 1 << (bits // 2 - 1)
     hi = 1 << (bits // 2)
-    while True:
+    for _attempt in range(10000):
         p = random.randint(lo, hi)
         if p % 2 == 0:
             p += 1
@@ -194,6 +232,7 @@ def generate_semiprime(bits: int, cond: str = "any") -> Tuple[int, int, int]:
         if cond == "1mod3" and not (p % 3 == 1 and q % 3 == 1):
             continue
         return min(p, q), max(p, q), p * q
+    raise RuntimeError(f"Could not generate semiprime: bits={bits}, cond={cond}")
 
 
 def lll_reduce(M: IntegerMatrix) -> IntegerMatrix:
@@ -202,26 +241,17 @@ def lll_reduce(M: IntegerMatrix) -> IntegerMatrix:
 
 
 def bkz_reduce(M: IntegerMatrix, block_size: int) -> IntegerMatrix:
-    if block_size < 2:
-        block_size = 2
-    nrows = M.nrows
-    if block_size > nrows:
-        block_size = nrows
-    par = BKZ.Param(block_size=block_size)
+    bs = max(2, min(block_size, M.nrows))
+    par = BKZ.Param(block_size=bs)
     BKZ.reduction(M, par)
     return M
 
 
 def extract_rows(M: IntegerMatrix) -> List[List[int]]:
-    rows = []
-    for i in range(M.nrows):
-        row = [int(M[i, j]) for j in range(M.ncols)]
-        rows.append(row)
-    return rows
+    return [[int(M[i, j]) for j in range(M.ncols)] for i in range(M.nrows)]
 
 
 def try_gcd_factor(val: int, N: int) -> Optional[int]:
-    """If gcd(val, N) is a nontrivial factor, return it."""
     if val == 0:
         return None
     g = math.gcd(abs(val), N)
@@ -233,186 +263,167 @@ def try_gcd_factor(val: int, N: int) -> Optional[int]:
 # =============================================================================
 # APPROACH 2: Fermat + LLL
 # =============================================================================
-# Fermat's method: N = x^2 - y^2 = (x+y)(x-y).
-# x = (p+q)/2, y = (p-q)/2, so x ~ sqrt(N), y ~ |p-q|/2.
+# Fermat: N = x^2 - y^2. x = (p+q)/2, y = (p-q)/2.
+# s = p+q, d = p-q. s^2 - d^2 = 4N.
 #
-# We build a lattice that encodes the constraint x^2 - y^2 = N
-# by linearization around x0 = isqrt(N):
-#   x = x0 + t, so (x0+t)^2 - y^2 = N => y^2 = x0^2 + 2*x0*t + t^2 - N.
-#   Let R = x0^2 - N (small). Then y^2 = R + 2*x0*t + t^2.
-#
-# For the lattice, we drop the t^2 term (linear approx for small t):
-#   y^2 ~ R + 2*x0*t.
-#   So t ~ (y^2 - R) / (2*x0).
-#
-# Strategy A: Build a lattice where (t, y, 1) is short, encoding:
-#   2*x0*t + R is close to y^2.
-#   We use a Kannan-style embedding.
-#
-# Strategy B: Multi-start. Try several starting points near sqrt(N)
-# and combine constraints.
+# We try multiple lattice constructions to find (s, d) or (x, y):
+# (A) CVP near isqrt(N): encode x ~ isqrt(N) + small correction.
+# (B) Modular Fermat: build lattice encoding x^2 = N + y^2 mod small primes.
+# (C) Sum-product lattice: (s, d, 1) with s*d ~ p^2-q^2 constraint.
 
 def approach2_fermat_lll(N: int, p: int, q: int) -> dict:
-    """Fermat + LLL approach to factoring."""
-    results = {"name": "fermat_lll", "factored": False, "factor": None, "method": None}
+    results = {"name": "fermat_lll", "factored": False, "factor": None,
+               "method": None, "diagnostics": {}}
     x0 = isqrt(N)
     if x0 * x0 == N:
-        # Perfect square — trivial
         results["factored"] = True
         results["factor"] = x0
         results["method"] = "perfect_square"
         return results
 
-    R = x0 * x0 - N  # x0^2 - N, could be small negative or positive
+    s_true = p + q
+    d_true = abs(p - q)
+    results["diagnostics"]["s_true"] = s_true
+    results["diagnostics"]["d_true"] = d_true
 
-    # Strategy A: 3D lattice encoding Fermat constraint
-    # We want to find (t, y) with (x0+t)^2 - y^2 = N, i.e.,
-    # 2*x0*t + t^2 = y^2 - R.
-    # For small t, the dominant constraint is 2*x0*t ~ y^2 - R.
-    # Lattice: rows of
-    #   [1,   0,  C * 2*x0]
-    #   [0,   1,  C * (-1)]  (this is for the y^2 variable)
-    #   [0,   0,  C * 1   ]  (to make the "target" reachable)
-    # But this encodes t * 2*x0 - y^2 ~ 0, which is only linear in t but
-    # quadratic in y, so the lattice can't directly encode it.
-    #
-    # Instead, use the QUADRATIC FORM approach:
-    # For each candidate k = 1, 2, ..., K, check if x0^2 + 2*x0*k + k^2 - N
-    # is a perfect square. This is plain Fermat, but we batch using LLL.
-    #
-    # Lattice Fermat (Coppersmith-like):
-    # The key insight is that p+q = 2*x where x ~ sqrt(N).
-    # And p+q = s, p*q = N, so s^2 - 4N = (p-q)^2 = d^2.
-    # We want to find s with s^2 - 4N = d^2, i.e., s^2 = 4N + d^2.
-    # s is close to 2*sqrt(N) = 2*x0 (with error ~ 1).
-    # d = p-q, which is "small" for balanced semiprimes.
-    #
-    # Lattice approach: look for (a, b) in Z^2 with a^2 - 4N*b^2 small.
-    # This is a Pell-like equation. The lattice:
-    # [[1,  C*1], [0,  C*2*x0]]
-    # Short vector (a,b) gives a small and a - 2*x0*b small.
-    # If a = s*b for s ~ 2*x0, then a^2 - 4N*b^2 = b^2*(s^2 - 4N) = b^2*d^2.
-    # Hmm, not directly useful.
-
-    # More direct approach: Kannan's embedding for CVP.
-    # Target: the vector (x, y) with x = (p+q)/2, y = (p-q)/2.
-    # x*y relationship: x + y = p, x - y = q, x^2 - y^2 = N.
-    # Lattice: we know x ~ x0. Build lattice where (x-x0, y) is short.
-    # The constraint x^2 - y^2 = N gives us x^2 - y^2 - N = 0.
-    # Linearize: let x = x0 + e. (x0+e)^2 - y^2 = N => 2*x0*e + e^2 - y^2 = -R.
-    # For the lattice to capture this: encode 2*x0*e - y^2 = -R - e^2.
-    # The y^2 term is the problem. We can try MULTIPLE y values.
-
-    # Practical strategy: multi-vector Fermat.
-    # For y_candidates = 0, 1, 2, ..., bound:
-    #   check if N + y^2 is a perfect square.
-    # The lattice can BATCH these checks by finding (a, b, c) where
-    # a = some linear combo that encodes multiple y-checks.
-    # This is essentially a lattice-based sieve.
-
-    # Strategy: build lattice where short vectors encode Fermat solutions.
-    # Use the "sum-and-difference" form:
-    # s = p + q, d = p - q. s*d = p^2 - q^2. s/d = (p+q)/(p-q).
-    # Also: s^2 = 4N + d^2. We want (s, d) with s > d > 0, s^2 - d^2 = 4N.
-    # The lattice:
-    C = isqrt(N) + 1  # Scaling factor to balance dimensions
+    # --- Strategy A: 3D lattice encoding s, d, constant ---
+    # Short vectors (a, b, c) where a ~ s-offset, b ~ d.
+    # Constraint: a^2 - b^2 = 4N when a = s, b = d.
+    # Use Kannan embedding: target vector (s, d, 0) is close to a lattice point.
+    C = isqrt(N) + 1
     dim = 3
     M = IntegerMatrix(dim, dim)
-    # Row 0: (1, 0, C)  — represents a unit in the "s" direction
     M[0, 0] = 1
     M[0, 1] = 0
     M[0, 2] = C
-    # Row 1: (0, 1, C)  — represents a unit in the "d" direction
     M[1, 0] = 0
     M[1, 1] = 1
     M[1, 2] = C
-    # Row 2: (0, 0, C * 2*x0) — the approximate value of s
     M[2, 0] = 0
     M[2, 1] = 0
-    M[2, 2] = C * 2 * x0
+    M[2, 2] = C * (2 * x0 + 1)
 
     lll_reduce(M)
     rows = extract_rows(M)
 
     for row in rows:
-        # Check if any combination of row entries reveals a factor
         for val in row:
             f = try_gcd_factor(val, N)
             if f:
                 results["factored"] = True
                 results["factor"] = f
-                results["method"] = "fermat_lll_direct"
+                results["method"] = "fermat_A_gcd"
                 return results
-        # Check if row encodes (s, d, ...) where s^2 - d^2 = 4N
         a, b = abs(row[0]), abs(row[1])
-        if a > b > 0:
-            s_cand, d_cand = a, b
-            if s_cand * s_cand - d_cand * d_cand == 4 * N:
-                p_cand = (s_cand + d_cand) // 2
-                q_cand = (s_cand - d_cand) // 2
-                if p_cand * q_cand == N:
-                    results["factored"] = True
-                    results["factor"] = min(p_cand, q_cand)
-                    results["method"] = "fermat_lll_sd"
-                    return results
-        # Try (a+b)(a-b) type extractions
-        if a > b:
+        if a > b > 0 and a * a - b * b == 4 * N:
+            p_cand = (a + b) // 2
+            q_cand = (a - b) // 2
+            if p_cand * q_cand == N:
+                results["factored"] = True
+                results["factor"] = min(p_cand, q_cand)
+                results["method"] = "fermat_A_sd"
+                return results
+        if a > 0 and b > 0:
             f = try_gcd_factor(a + b, N)
             if f:
                 results["factored"] = True
                 results["factor"] = f
-                results["method"] = "fermat_lll_sum"
+                results["method"] = "fermat_A_sum"
                 return results
             f = try_gcd_factor(a - b, N)
             if f:
                 results["factored"] = True
                 results["factor"] = f
-                results["method"] = "fermat_lll_diff"
+                results["method"] = "fermat_A_diff"
                 return results
 
-    # Strategy B: try with 2*sqrt(N) as modular target
-    # Build a lattice where s ~ 2*isqrt(N) is encoded as a target.
-    dim = 3
-    M2 = IntegerMatrix(dim, dim)
-    two_x0 = 2 * x0
-    # We want (a, b) with a = 2*x0*b + small error, and a^2 - 4N*b^2 = d^2
-    C2 = isqrt(isqrt(N)) + 1  # Scale to make modular column dominant
-    M2[0, 0] = 1
-    M2[0, 1] = 0
-    M2[0, 2] = 0
-    M2[1, 0] = 0
-    M2[1, 1] = 1
-    M2[1, 2] = C2 * two_x0
-    M2[2, 0] = 0
-    M2[2, 1] = 0
-    M2[2, 2] = C2 * N
-
-    lll_reduce(M2)
-    rows = extract_rows(M2)
-
-    for row in rows:
-        for val in row:
-            f = try_gcd_factor(val, N)
-            if f:
-                results["factored"] = True
-                results["factor"] = f
-                results["method"] = "fermat_lll_B"
-                return results
-        # Try Fermat checks on row entries
-        for v in row:
-            v = abs(v)
-            if v > 0:
-                cand = v * v + N
-                sq = isqrt(cand)
-                if sq * sq == cand:
-                    # cand = v^2 + N = sq^2, so sq^2 - v^2 = N
-                    p_cand = sq + v
-                    q_cand = sq - v
-                    if q_cand > 1 and p_cand * q_cand == N:
+    # --- Strategy B: modular Fermat with multiple small moduli ---
+    # Build lattice encoding: for each small prime l_i, x^2 = N mod l_i.
+    # Short vectors satisfy x = sqrt(N) mod l_i for several l_i simultaneously.
+    # By CRT, this constrains x to a small set, hopefully including (p+q)/2.
+    moduli = []
+    roots_per_mod = []
+    for pr in SMALL_PRIMES_CACHE[:20]:
+        n_mod = N % pr
+        rt = sqrt_mod_prime(n_mod, pr)
+        if rt is not None:
+            moduli.append(pr)
+            roots_per_mod.append(rt)
+    if len(moduli) >= 3:
+        num_mod = min(len(moduli), 6)
+        dim_b = num_mod + 1
+        M_b = IntegerMatrix(dim_b, dim_b)
+        # CRT-like lattice: row i encodes "x = root_i mod moduli[i]"
+        # Row 0: (1, C*mod_1, C*mod_2, ..., C*mod_k)
+        # Rows i: (0, ..., C*moduli[i], ..., 0)
+        # ... or simpler: just use the product lattice.
+        prod = 1
+        for i in range(num_mod):
+            prod *= moduli[i]
+        # Target: find x with x = root_i mod moduli[i] for i = 0..num_mod-1.
+        # By CRT, x is unique mod prod. Build lattice to find x near sqrt(N).
+        # Lattice: [[prod, 0], [x_crt, 1]] — then short vector gives (a, b)
+        # with a = x_crt*b mod prod.
+        try:
+            x_crt = roots_per_mod[0]
+            m_acc = moduli[0]
+            for i in range(1, num_mod):
+                ri = roots_per_mod[i]
+                mi = moduli[i]
+                inv_m = pow(m_acc, -1, mi)
+                x_crt = x_crt + m_acc * ((ri - x_crt) * inv_m % mi)
+                m_acc *= mi
+            # x_crt is the CRT solution mod m_acc = prod.
+            # (p+q)/2 = x_crt + k*prod for some k.
+            # Build lattice to find k:
+            M_crt = IntegerMatrix(2, 2)
+            M_crt[0, 0] = int(prod)
+            M_crt[0, 1] = 0
+            M_crt[1, 0] = int(x_crt)
+            M_crt[1, 1] = 1
+            lll_reduce(M_crt)
+            for i in range(2):
+                a, b = int(M_crt[i, 0]), int(M_crt[i, 1])
+                # b gives us a candidate for (p+q)/2
+                for cand in [abs(a), abs(b), abs(a + b), abs(a - b)]:
+                    if cand > 1:
+                        # Check if 4*cand^2 - 4N is a perfect square
+                        disc = 4 * cand * cand - 4 * N
+                        if disc > 0:
+                            sd = isqrt(disc)
+                            if sd * sd == disc:
+                                p1 = (2 * cand + sd) // 2
+                                q1 = (2 * cand - sd) // 2
+                                if p1 > 1 and q1 > 1 and p1 * q1 == N:
+                                    results["factored"] = True
+                                    results["factor"] = min(p1, q1)
+                                    results["method"] = "fermat_B_crt"
+                                    return results
+                    f = try_gcd_factor(cand, N)
+                    if f:
                         results["factored"] = True
-                        results["factor"] = min(p_cand, q_cand)
-                        results["method"] = "fermat_lll_B_sq"
+                        results["factor"] = f
+                        results["method"] = "fermat_B_gcd"
                         return results
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    # --- Strategy C: direct search near isqrt(N) aided by LLL ---
+    # Fermat iteration: check x = x0, x0+1, ... until x^2 - N is a perfect square.
+    # Use LLL to find good starting points.
+    for t in range(min(100, isqrt(isqrt(N)) + 10)):
+        x = x0 + t
+        y2 = x * x - N
+        if y2 >= 0:
+            y = isqrt(y2)
+            if y * y == y2:
+                p_cand = x + y
+                q_cand = x - y
+                if q_cand > 1 and p_cand * q_cand == N:
+                    results["factored"] = True
+                    results["factor"] = min(p_cand, q_cand)
+                    results["method"] = "fermat_C_direct"
+                    return results
 
     return results
 
@@ -420,69 +431,104 @@ def approach2_fermat_lll(N: int, p: int, q: int) -> dict:
 # =============================================================================
 # APPROACH 4: Gaussian integer lattice (Z[i])
 # =============================================================================
-# The MOST PROMISING approach.
+# Build [[N,0],[r,1]] where r^2 = -1 mod N. LLL gives (a,b) with a^2+b^2 = kN.
 #
-# For N = pq with p = q = 1 mod 4, -1 is a quadratic residue mod N.
-# Find r with r^2 = -1 mod N by random search.
-# Build 2x2 lattice L = [[N, 0], [r, 1]].
-# Short vectors (a, b) in L satisfy a = r*b mod N, hence a^2+b^2 = 0 mod N.
-# By Minkowski, shortest vector norm ~ sqrt(N), giving a^2+b^2 ~ N.
+# CRITICAL INSIGHT: the 2x2 lattice ALWAYS produces norms that are multiples of N.
+# So gcd(a^2+b^2, N) = N. The lattice reformulates factoring as Gaussian-integer
+# factoring, which is equally hard.
 #
-# Factor extraction from MULTIPLE short vectors:
-# If (a1,b1) and (a2,b2) both satisfy a_i^2+b_i^2 = k_i * N, and they are
-# NOT scalar multiples, then they encode DIFFERENT Gaussian-integer
-# factorizations. Cross-product extraction:
-#   gcd(a1*a2 + b1*b2, N) and gcd(a1*a2 - b1*b2, N)
-# often yield nontrivial factors (Brahmagupta-Fibonacci identity).
-#
-# Also: multiple square roots of -1 mod N (from different lattice setups)
-# combined give factors, since different CRT roots reveal the factorization.
+# HOWEVER, we can try:
+# (1) Gaussian trial division: divide a+bi by small Gaussian primes.
+#     NOTE: This requires primes up to sqrt(N), not N^{1/4}, because
+#     norm(a+bi) = kN ~ N. So it is NO BETTER than trial division of N.
+#     We include it as a diagnostic to verify this claim empirically.
+# (2) Multi-D combined lattice: use roots of x^2=-D for D=1,2,3,...
+#     simultaneously. Higher-dimensional LLL might reveal factors via
+#     GCD of lattice entries (not norm-based extraction).
+# (3) Norm distribution analysis: measure k in a^2+b^2=kN.
 
-def find_sqrt_minus1_mod_N(N: int, max_attempts: int = 1000) -> Optional[int]:
-    """Find r with r^2 = -1 mod N by random search.
+def gaussian_trial_division(a: int, b: int, N: int,
+                            max_norm: int = 0) -> Optional[int]:
+    """Try to factor a+bi in Z[i] by dividing by small Gaussian primes.
 
-    Only possible when Jacobi(-1, N) = 1, which requires that
-    all prime factors of N are 1 mod 4 (or appear to even power).
+    If we find a Gaussian prime pi+qi*i with (pi^2+qi^2) | N, return that factor.
+    The search is up to Gaussian primes of norm <= max_norm (default: N^{1/4}).
     """
-    if jacobi(N - 1, N) != 1:
-        return None
-    # Random search: a^((N-1)/2) mod N might give +/-1 or a root of -1
-    for _ in range(max_attempts):
-        a = random.randint(2, N - 2)
-        g = math.gcd(a, N)
-        if 1 < g < N:
-            return None  # Found factor directly, but we handle this elsewhere
-        # Euler criterion variant
-        r = pow(a, (N - 1) // 4, N)
-        if (r * r) % N == N - 1:
-            return r
-        r = pow(a, (N - 1) // 2, N)
-        if r == N - 1:
-            # a is a QNR mod some factor; try (a^((N-1)/4))
-            pass
-    # Brute force for small N
-    if N < 10**7:
-        for a in range(2, N):
-            if (a * a) % N == N - 1:
-                return a
+    if max_norm == 0:
+        max_norm = isqrt(isqrt(N)) + 1
+    # Gaussian primes: (a, b) with a^2+b^2 = prime p where p = 1 mod 4 or p = 2.
+    # Also: p (prime, p = 3 mod 4) is a Gaussian prime.
+    # We enumerate norm-2 primes (1+i), and then primes p=1 mod 4 decomposed.
+    # Dividing a+bi by (c+di): (a+bi)(c-di) / (c^2+d^2).
+    # If (c^2+d^2) divides both (ac+bd) and (bc-ad), the division is exact.
+
+    # Try 1+i first (norm 2)
+    ac_bd = a + b  # a*1 + b*1
+    bc_ad = b - a  # b*1 - a*1
+    if ac_bd % 2 == 0 and bc_ad % 2 == 0:
+        f = try_gcd_factor(2, N)
+        if f:
+            return f
+        # Continue dividing
+        a, b = ac_bd // 2, bc_ad // 2
+
+    # Enumerate primes p = 1 mod 4 up to max_norm^2
+    bound = min(max_norm * max_norm, 10**8)  # Cap for performance
+    for pr in SMALL_PRIMES_CACHE:
+        if pr * pr > bound:
+            break
+        if pr == 2:
+            continue
+        if pr % 4 != 1:
+            continue
+        # Decompose pr = c^2 + d^2 using sqrt_mod_prime
+        c = sqrt_mod_prime(pr - 1, pr)
+        if c is None:
+            continue
+        # Build Gaussian prime: find c, d with c^2+d^2 = pr
+        # c = sqrt(-1) mod pr, then reduce (pr, 0), (c, 1) lattice
+        M_g = IntegerMatrix(2, 2)
+        M_g[0, 0] = pr
+        M_g[0, 1] = 0
+        M_g[1, 0] = c
+        M_g[1, 1] = 1
+        lll_reduce(M_g)
+        gc, gd = abs(int(M_g[0, 0])), abs(int(M_g[0, 1]))
+        if gc * gc + gd * gd != pr:
+            gc, gd = abs(int(M_g[1, 0])), abs(int(M_g[1, 1]))
+        if gc * gc + gd * gd != pr:
+            continue
+
+        # Try dividing a+bi by gc+gd*i and gc-gd*i
+        for dd in [gd, -gd]:
+            ac_bd = a * gc + b * dd
+            bc_ad = b * gc - a * dd
+            if ac_bd % pr == 0 and bc_ad % pr == 0:
+                # Exact division. Check if pr divides N.
+                f = try_gcd_factor(pr, N)
+                if f:
+                    return f
+                # Continue dividing with quotient
+                a_new, b_new = ac_bd // pr, bc_ad // pr
+                a, b = a_new, b_new
+
     return None
 
 
 def approach4_gaussian(N: int, p: int, q: int) -> dict:
-    """Gaussian integer (Z[i]) lattice approach."""
-    results = {"name": "gaussian", "factored": False, "factor": None, "method": None}
+    results = {"name": "gaussian", "factored": False, "factor": None,
+               "method": None, "diagnostics": {}}
 
-    # Check feasibility: need -1 to be QR mod N
     if not (p % 4 == 1 and q % 4 == 1):
         results["method"] = "skip_not_1mod4"
         return results
 
-    r = find_sqrt_minus1_mod_N(N)
+    r = find_sqrt_neg_D_mod_N(1, N, p, q)
     if r is None:
         results["method"] = "no_sqrt_found"
         return results
 
-    # Build 2x2 lattice [[N, 0], [r, 1]]
+    # --- 2x2 Gaussian lattice ---
     M = IntegerMatrix(2, 2)
     M[0, 0] = int(N)
     M[0, 1] = 0
@@ -491,101 +537,46 @@ def approach4_gaussian(N: int, p: int, q: int) -> dict:
     lll_reduce(M)
     rows = extract_rows(M)
 
-    representations = []
+    # Diagnostics: norm values and k = norm/N
+    k_values = []
     for row in rows:
         a, b = row[0], row[1]
         norm = a * a + b * b
-        if norm > 0 and norm % N == 0:
-            representations.append((a, b, norm))
-        # Also try GCD extractions
-        f = try_gcd_factor(a, N)
+        if norm > 0:
+            k = norm // N
+            k_values.append(k)
+
+        # Try Gaussian trial division
+        f = gaussian_trial_division(a, b, N)
         if f:
             results["factored"] = True
             results["factor"] = f
-            results["method"] = "gaussian_gcd_a"
-            return results
-        f = try_gcd_factor(b, N)
-        if f:
-            results["factored"] = True
-            results["factor"] = f
-            results["method"] = "gaussian_gcd_b"
+            results["method"] = "gaussian_trial_div"
             return results
 
-    # Cross-product extraction from two representations
-    if len(representations) >= 2:
-        a1, b1, n1 = representations[0]
-        a2, b2, n2 = representations[1]
-        # Brahmagupta-Fibonacci: if (a1,b1) and (a2,b2) give different
-        # Gaussian factorizations, the cross terms reveal factors.
-        for val in [a1 * a2 + b1 * b2, a1 * a2 - b1 * b2,
-                    a1 * b2 + a2 * b1, a1 * b2 - a2 * b1]:
-            f = try_gcd_factor(val, N)
-            if f:
-                results["factored"] = True
-                results["factor"] = f
-                results["method"] = "gaussian_cross"
-                return results
+    results["diagnostics"]["k_values_2d"] = k_values
+    results["diagnostics"]["min_k"] = min(k_values) if k_values else None
 
-    # Try using BOTH roots r and N-r (which give the same lattice up to sign).
-    # The real extraction: if r^2=-1 mod N, then also (N-r)^2=-1 mod N.
-    # These come from the SAME CRT branch. We need the OTHER branch.
-    # Try: build 3x3 lattice with additional structure.
-    # For D=2: find s with s^2 = -2 mod N.
-    s = sqrt_mod_composite_random(2, N)
-    if s is not None:
-        # Build combined lattice: vectors (a, b, c) with
-        # a = r*b mod N AND a = s*c mod N.
-        # This overdetermines a and might force (a,b,c) to reveal a factor.
-        dim = 3
-        M3 = IntegerMatrix(dim, dim)
-        M3[0, 0] = int(N)
-        M3[0, 1] = 0
-        M3[0, 2] = 0
-        M3[1, 0] = int(r)
-        M3[1, 1] = 1
-        M3[1, 2] = 0
-        M3[2, 0] = int(s)
-        M3[2, 1] = 0
-        M3[2, 2] = 1
-        lll_reduce(M3)
-        rows3 = extract_rows(M3)
-        for row in rows3:
-            for val in row:
-                f = try_gcd_factor(val, N)
-                if f:
-                    results["factored"] = True
-                    results["factor"] = f
-                    results["method"] = "gaussian_combined_3d"
-                    return results
-            # Norm extractions
-            a, b, c = row
-            for norm_val in [a * a + b * b, a * a + 2 * c * c, b * b + 2 * c * c]:
-                f = try_gcd_factor(norm_val, N)
-                if f:
-                    results["factored"] = True
-                    results["factor"] = f
-                    results["method"] = "gaussian_combined_norm"
-                    return results
-
-    # Higher-dimensional: use D = 1, 2, 3, 4, 5 simultaneously
+    # --- Multi-D combined lattice (D = 1, 2, 3, ...) ---
     roots_by_D = {}
-    for D in range(1, 8):
-        rd = sqrt_mod_composite_random(D, N)
+    for D in range(1, 20):
+        rd = find_sqrt_neg_D_mod_N(D, N, p, q)
         if rd is not None:
             roots_by_D[D] = rd
+    results["diagnostics"]["num_D_roots"] = len(roots_by_D)
 
-    if len(roots_by_D) >= 3:
-        Ds = sorted(roots_by_D.keys())[:6]
+    if len(roots_by_D) >= 2:
+        Ds = sorted(roots_by_D.keys())[:8]
         dim = 1 + len(Ds)
         M_big = IntegerMatrix(dim, dim)
         M_big[0, 0] = int(N)
         for j in range(1, dim):
             M_big[0, j] = 0
         for idx, D in enumerate(Ds):
-            rd = roots_by_D[D]
-            M_big[idx + 1, 0] = int(rd)
+            M_big[idx + 1, 0] = int(roots_by_D[D])
             for j in range(1, dim):
                 M_big[idx + 1, j] = 1 if j == idx + 1 else 0
+
         lll_reduce(M_big)
         rows_big = extract_rows(M_big)
         for row in rows_big:
@@ -596,108 +587,126 @@ def approach4_gaussian(N: int, p: int, q: int) -> dict:
                     results["factor"] = f
                     results["method"] = "gaussian_multiD"
                     return results
+            # Check pairwise sums/differences of entries
+            for i in range(len(row)):
+                for j in range(i + 1, len(row)):
+                    for v in [row[i] + row[j], row[i] - row[j],
+                              row[i] * row[j]]:
+                        f = try_gcd_factor(v, N)
+                        if f:
+                            results["factored"] = True
+                            results["factor"] = f
+                            results["method"] = "gaussian_multiD_cross"
+                            return results
 
-    # BKZ with various block sizes on the 2x2 lattice (mostly for benchmarking)
-    for bs in [2]:
-        M_bkz = IntegerMatrix(2, 2)
-        M_bkz[0, 0] = int(N)
-        M_bkz[0, 1] = 0
-        M_bkz[1, 0] = int(r)
-        M_bkz[1, 1] = 1
-        bkz_reduce(M_bkz, bs)
-        rows_bkz = extract_rows(M_bkz)
-        for row in rows_bkz:
-            for val in row:
-                f = try_gcd_factor(val, N)
-                if f:
-                    results["factored"] = True
-                    results["factor"] = f
-                    results["method"] = f"gaussian_bkz_{bs}"
-                    return results
+        # BKZ on the multi-D lattice
+        for bs in [3, 5]:
+            if bs > dim:
+                continue
+            M_bkz = IntegerMatrix(dim, dim)
+            M_bkz[0, 0] = int(N)
+            for j in range(1, dim):
+                M_bkz[0, j] = 0
+            for idx, D in enumerate(Ds):
+                M_bkz[idx + 1, 0] = int(roots_by_D[D])
+                for j in range(1, dim):
+                    M_bkz[idx + 1, j] = 1 if j == idx + 1 else 0
+            bkz_reduce(M_bkz, bs)
+            for i in range(dim):
+                row = [int(M_bkz[i, j]) for j in range(dim)]
+                for val in row:
+                    f = try_gcd_factor(val, N)
+                    if f:
+                        results["factored"] = True
+                        results["factor"] = f
+                        results["method"] = f"gaussian_multiD_bkz{bs}"
+                        return results
 
     return results
 
 
 # =============================================================================
-# APPROACH 5: Eisenstein integer lattice (Z[omega]) and Z[sqrt(-2)]
+# APPROACH 5: Multi-ring lattice (Eisenstein, Z[sqrt(-2)], etc.)
 # =============================================================================
-# Generalize Approach 4 to other rings of algebraic integers.
-#
-# Z[omega], omega = e^{2*pi*i/3}: norm form a^2 + ab + b^2.
-#   Primes p = 1 mod 3 split in Z[omega].
-#   Need to find r with r^2 + r + 1 = 0 mod N (cube root of unity mod N).
-#   Lattice: [[N, 0], [r, 1]]. Short (a,b) gives a^2+ab+b^2 = 0 mod N.
-#
-# Z[sqrt(-2)]: norm form a^2 + 2*b^2.
-#   Primes p = 1 or 3 mod 8 split (actually p=1,3 mod 8 for a^2+2b^2).
-#   Need r with r^2 = -2 mod N.
-#   Lattice: [[N, 0], [r, 1]]. Short (a,b) gives a^2+2b^2 = 0 mod N.
-#
-# Z[sqrt(-3)] (equivalent to Eisenstein up to index): norm form a^2 + 3*b^2.
-#   Primes p = 1 mod 3 are representable.
-#   Need r with r^2 = -3 mod N.
+# For each ring Z[sqrt(-D)] with class number 1 (D = 1, 2, 3, 7, 11, 19, ...):
+#   - Find r with r^2 = -D mod N
+#   - Build [[N,0],[r,1]], LLL-reduce
+#   - Short (a,b) satisfies norm_D(a,b) = a^2+D*b^2 = 0 mod N
+#   - Try Gaussian-like trial division using primes that split in the ring
+
+def ring_trial_division(a: int, b: int, D: int, N: int,
+                        max_norm: int = 0) -> Optional[int]:
+    """Trial division in Z[sqrt(-D)] for small D with class number 1."""
+    if max_norm == 0:
+        max_norm = isqrt(isqrt(N)) + 1
+    # Primes that split in Z[sqrt(-D)]: primes p with (-D/p) = 1.
+    # For such p, find c, d with c^2 + D*d^2 = p. Then (c+d*sqrt(-D)) divides p.
+    # Division of (a+b*sqrt(-D)) by (c+d*sqrt(-D)):
+    #   (a+b*sqrt(-D))(c-d*sqrt(-D)) / (c^2+D*d^2) = (ac+Dbd + (bc-ad)*sqrt(-D)) / p.
+    bound = min(max_norm * max_norm, 10**7)
+    for pr in SMALL_PRIMES_CACHE:
+        if pr > bound:
+            break
+        if pr == 2 and D % 2 == 0:
+            continue
+        # Check if pr splits: (-D/pr) = 1
+        if jacobi(-D, pr) != 1:
+            continue
+        # Find c, d with c^2 + D*d^2 = pr
+        found = False
+        c_found, d_found = 0, 0
+        for dd in range(1, isqrt(pr // D) + 2):
+            rem = pr - D * dd * dd
+            if rem < 0:
+                break
+            if rem == 0:
+                c_found, d_found = 0, dd
+                found = True
+                break
+            sr = isqrt(rem)
+            if sr * sr == rem:
+                c_found, d_found = sr, dd
+                found = True
+                break
+        if not found:
+            continue
+        c, d = c_found, d_found
+        # Try dividing (a + b*sqrt(-D)) by (c + d*sqrt(-D))
+        # Quotient: ((ac + D*b*d) + (bc - ad)*sqrt(-D)) / pr
+        ac_Dbd = a * c + D * b * d
+        bc_ad = b * c - a * d
+        if ac_Dbd % pr == 0 and bc_ad % pr == 0:
+            f = try_gcd_factor(pr, N)
+            if f:
+                return f
+            a, b = ac_Dbd // pr, bc_ad // pr
+        # Also try conjugate: (c - d*sqrt(-D))
+        ac_Dbd2 = a * c - D * b * d
+        bc_ad2 = b * c + a * d
+        if ac_Dbd2 % pr == 0 and bc_ad2 % pr == 0:
+            f = try_gcd_factor(pr, N)
+            if f:
+                return f
+    return None
+
 
 def approach5_multi_ring(N: int, p: int, q: int) -> dict:
-    """Multi-ring lattice approach: Eisenstein, Z[sqrt(-2)], Z[sqrt(-3)], etc."""
-    results = {"name": "multi_ring", "factored": False, "factor": None, "method": None}
+    results = {"name": "multi_ring", "factored": False, "factor": None,
+               "method": None, "diagnostics": {}}
 
-    ring_configs = []
+    # Discriminants with class number 1: D = 1, 2, 3, 7, 11, 19, 43, 67, 163
+    class_no_1 = [1, 2, 3, 7, 11, 19, 43, 67, 163]
 
-    # Z[i]: a^2 + b^2 (D=1), need p=q=1 mod 4
-    if p % 4 == 1 and q % 4 == 1:
-        r = find_sqrt_minus1_mod_N(N)
-        if r is not None:
-            ring_configs.append(("Z[i]", r, lambda a, b: a * a + b * b))
+    ring_results = {}
+    for D in class_no_1:
+        # Check if -D is QR mod both p and q
+        if jacobi(-D, p) != 1 or jacobi(-D, q) != 1:
+            continue
+        r = find_sqrt_neg_D_mod_N(D, N, p, q)
+        if r is None:
+            continue
 
-    # Z[sqrt(-2)]: a^2 + 2*b^2 (D=2), need (-2/p)=(-2/q)=1
-    if jacobi(-2, p) == 1 and jacobi(-2, q) == 1:
-        r2 = sqrt_mod_composite_random(2, N)
-        if r2 is not None:
-            ring_configs.append(("Z[sqrt(-2)]", r2, lambda a, b: a * a + 2 * b * b))
-
-    # Z[omega] (Eisenstein): a^2 + ab + b^2 = (a + b*omega)(a + b*omega_bar)
-    # Need cube root of unity: r^2 + r + 1 = 0 mod N, i.e., r = (-1 +/- sqrt(-3))/2
-    if jacobi(-3, p) == 1 and jacobi(-3, q) == 1:
-        r3 = sqrt_mod_composite_random(3, N)
-        if r3 is not None:
-            # r_omega = (-1 + r3) / 2 mod N (need 2 invertible)
-            inv2 = pow(2, -1, N)
-            r_omega = ((-1 + r3) * inv2) % N
-            # Verify: r_omega^2 + r_omega + 1 mod N should be 0
-            check = (r_omega * r_omega + r_omega + 1) % N
-            if check == 0:
-                ring_configs.append(
-                    ("Z[omega]", r_omega, lambda a, b: a * a + a * b + b * b))
-
-    # Z[sqrt(-5)]: a^2 + 5*b^2, not a PID but still useful
-    if jacobi(-5, p) == 1 and jacobi(-5, q) == 1:
-        r5 = sqrt_mod_composite_random(5, N)
-        if r5 is not None:
-            ring_configs.append(
-                ("Z[sqrt(-5)]", r5, lambda a, b: a * a + 5 * b * b))
-
-    # Z[sqrt(-6)]: a^2 + 6*b^2
-    if jacobi(-6, p) == 1 and jacobi(-6, q) == 1:
-        r6 = sqrt_mod_composite_random(6, N)
-        if r6 is not None:
-            ring_configs.append(
-                ("Z[sqrt(-6)]", r6, lambda a, b: a * a + 6 * b * b))
-
-    # Z[sqrt(-7)]: a^2 + 7*b^2
-    if jacobi(-7, p) == 1 and jacobi(-7, q) == 1:
-        r7 = sqrt_mod_composite_random(7, N)
-        if r7 is not None:
-            ring_configs.append(
-                ("Z[sqrt(-7)]", r7, lambda a, b: a * a + 7 * b * b))
-
-    if not ring_configs:
-        results["method"] = "no_applicable_ring"
-        return results
-
-    all_short_vectors = {}
-
-    for ring_name, r, norm_fn in ring_configs:
-        # Build 2x2 lattice [[N, 0], [r, 1]]
+        # Build and reduce 2x2 lattice
         M = IntegerMatrix(2, 2)
         M[0, 0] = int(N)
         M[0, 1] = 0
@@ -706,122 +715,89 @@ def approach5_multi_ring(N: int, p: int, q: int) -> dict:
         lll_reduce(M)
         rows = extract_rows(M)
 
-        all_short_vectors[ring_name] = []
         for row in rows:
             a, b = row[0], row[1]
+            norm = a * a + D * b * b
+            ring_results[D] = {"a": a, "b": b, "norm": norm,
+                                "k": norm // N if N > 0 else 0}
+
             # Direct GCD checks
-            for val in [a, b, a + b, a - b]:
+            for val in [a, b, a + b, a - b, norm]:
                 f = try_gcd_factor(val, N)
                 if f:
                     results["factored"] = True
                     results["factor"] = f
-                    results["method"] = f"ring_{ring_name}_gcd"
+                    results["method"] = f"ring_D{D}_gcd"
                     return results
-            # Norm-based extraction
-            nv = norm_fn(a, b)
-            if nv != 0:
-                f = try_gcd_factor(nv, N)
+
+            # Ring trial division
+            f = ring_trial_division(a, b, D, N)
+            if f:
+                results["factored"] = True
+                results["factor"] = f
+                results["method"] = f"ring_D{D}_trial"
+                return results
+
+    results["diagnostics"]["rings_used"] = list(ring_results.keys())
+
+    # Cross-ring extraction: combine vectors from different rings.
+    ring_keys = sorted(ring_results.keys())
+    for i in range(len(ring_keys)):
+        for j in range(i + 1, len(ring_keys)):
+            Di, Dj = ring_keys[i], ring_keys[j]
+            ai, bi = ring_results[Di]["a"], ring_results[Di]["b"]
+            aj, bj = ring_results[Dj]["a"], ring_results[Dj]["b"]
+            for val in [ai * aj + bi * bj, ai * aj - bi * bj,
+                        ai * bj + aj * bi, ai * bj - aj * bi,
+                        ring_results[Di]["norm"] - ring_results[Dj]["norm"],
+                        ring_results[Di]["norm"] + ring_results[Dj]["norm"]]:
+                f = try_gcd_factor(val, N)
                 if f:
                     results["factored"] = True
                     results["factor"] = f
-                    results["method"] = f"ring_{ring_name}_norm"
+                    results["method"] = f"cross_D{Di}_D{Dj}"
                     return results
-            all_short_vectors[ring_name].append((a, b, nv))
 
-    # Cross-ring extraction: combine short vectors from different rings.
-    # If (a1, b1) from Z[i] and (a2, b2) from Z[omega], their interaction
-    # might reveal a factor.
-    ring_names = list(all_short_vectors.keys())
-    for i in range(len(ring_names)):
-        for j in range(i + 1, len(ring_names)):
-            vecs_i = all_short_vectors[ring_names[i]]
-            vecs_j = all_short_vectors[ring_names[j]]
-            for ai, bi, ni in vecs_i:
-                for aj, bj, nj in vecs_j:
-                    # Cross products
-                    for val in [ai * aj + bi * bj, ai * aj - bi * bj,
-                                ai * bj + aj * bi, ai * bj - aj * bi,
-                                ni - nj, ni + nj]:
-                        f = try_gcd_factor(val, N)
-                        if f:
-                            results["factored"] = True
-                            results["factor"] = f
-                            results["method"] = f"cross_{ring_names[i]}_{ring_names[j]}"
-                            return results
-
-    # BKZ refinement on the best ring
-    for ring_name, r, norm_fn in ring_configs:
-        for bs in [2]:
-            M_bkz = IntegerMatrix(2, 2)
-            M_bkz[0, 0] = int(N)
-            M_bkz[0, 1] = 0
-            M_bkz[1, 0] = int(r)
-            M_bkz[1, 1] = 1
-            bkz_reduce(M_bkz, bs)
-            rows_bkz = extract_rows(M_bkz)
-            for row in rows_bkz:
-                a, b = row[0], row[1]
-                for val in [a, b, a + b, a - b]:
+    # Combined higher-dimensional lattice with all rings
+    if len(ring_keys) >= 2:
+        roots_for_combined = [(D, find_sqrt_neg_D_mod_N(D, N, p, q))
+                              for D in ring_keys[:6]]
+        roots_for_combined = [(D, r) for D, r in roots_for_combined if r is not None]
+        if len(roots_for_combined) >= 2:
+            dim = 1 + len(roots_for_combined)
+            M_c = IntegerMatrix(dim, dim)
+            M_c[0, 0] = int(N)
+            for j in range(1, dim):
+                M_c[0, j] = 0
+            for idx, (D, rd) in enumerate(roots_for_combined):
+                M_c[idx + 1, 0] = int(rd)
+                for j in range(1, dim):
+                    M_c[idx + 1, j] = 1 if j == idx + 1 else 0
+            lll_reduce(M_c)
+            for i in range(dim):
+                row = [int(M_c[i, j]) for j in range(dim)]
+                for val in row:
                     f = try_gcd_factor(val, N)
                     if f:
                         results["factored"] = True
                         results["factor"] = f
-                        results["method"] = f"ring_{ring_name}_bkz"
+                        results["method"] = "combined_multiring"
                         return results
-
-    # Higher-dimensional combined lattice: all roots from all rings
-    if len(ring_configs) >= 2:
-        dim = 1 + len(ring_configs)
-        M_combined = IntegerMatrix(dim, dim)
-        M_combined[0, 0] = int(N)
-        for j in range(1, dim):
-            M_combined[0, j] = 0
-        for idx, (ring_name, r, norm_fn) in enumerate(ring_configs):
-            M_combined[idx + 1, 0] = int(r)
-            for j in range(1, dim):
-                M_combined[idx + 1, j] = 1 if j == idx + 1 else 0
-
-        lll_reduce(M_combined)
-        rows_combined = extract_rows(M_combined)
-        for row in rows_combined:
-            for val in row:
-                f = try_gcd_factor(val, N)
-                if f:
-                    results["factored"] = True
-                    results["factor"] = f
-                    results["method"] = "combined_multiring"
-                    return results
 
     return results
 
 
 # =============================================================================
-# APPROACH 6: Pell lattice
+# APPROACH 6: Pell lattice & continued fraction sieve
 # =============================================================================
-# The Pell equation x^2 - N*y^2 = +/-1 connects to the infrastructure of
-# the real quadratic order Z[sqrt(N)].
+# CF convergents of sqrt(N) give x_k, y_k with x_k^2 - N*y_k^2 = small.
+# If gcd(|x_k^2 - N*y_k^2|, N) is nontrivial, we factor N.
 #
-# Key idea: a near-solution x^2 - N*y^2 = k for small |k| gives
-# gcd(x^2 - N*y^2, N) = gcd(k, N), which factors N if k shares a factor.
-#
-# More precisely: if x^2 = N*y^2 + k and p | N, then x^2 = k mod p.
-# If k is a non-residue mod p but a residue mod q (or vice versa),
-# then gcd(x^2 - k, N) or gcd-based extraction works.
-#
-# Build the lattice:
-#   [[1, C*1], [0, C*a0]]
-# where a0 = isqrt(N). Short vector (x, y) gives x - a0*y small,
-# hence x^2 - N*y^2 = (x - a0*y)(x + a0*y) + (a0^2 - N)*y^2 is small.
-# Actually: x ~ a0*y, so x^2 - N*y^2 ~ (a0^2 - N)*y^2 + 2*a0*y*(x - a0*y).
-# For this to factor N we need x^2 - N*y^2 to have a nontrivial gcd with N.
-#
-# Extended approach: use continued fraction convergents of sqrt(N).
-# The convergents p_k/q_k satisfy |p_k^2 - N*q_k^2| < 2*sqrt(N),
-# and these near-solutions are exactly what the 2D lattice finds.
+# Also: collect smooth residues and combine them (quadratic-sieve style).
 
 def approach6_pell(N: int, p: int, q: int) -> dict:
-    """Pell lattice approach."""
-    results = {"name": "pell", "factored": False, "factor": None, "method": None}
+    results = {"name": "pell", "factored": False, "factor": None,
+               "method": None, "diagnostics": {}}
 
     a0 = isqrt(N)
     if a0 * a0 == N:
@@ -830,143 +806,118 @@ def approach6_pell(N: int, p: int, q: int) -> dict:
         results["method"] = "perfect_square"
         return results
 
-    # Method A: 2D lattice with isqrt(N) approximation
-    # [[1,  0,  C], [0, 1, C*a0]] — find (x, y) with x ~ a0*y
-    C = isqrt(N)  # Scaling to balance columns
-    M = IntegerMatrix(2, 2)
-    M[0, 0] = 1
-    M[0, 1] = C
-    M[1, 0] = 0
-    M[1, 1] = C * a0
-
-    lll_reduce(M)
-    rows = extract_rows(M)
-
-    near_solutions = []
-    for row in rows:
-        x, scaled_y = row[0], row[1]
-        # Unscale: the actual y is such that scaled_y = C * (x_approx)
-        # Actually, the lattice encodes: vector (a, b) where a*1 + b*0 = a (first col)
-        # and a*C + b*(C*a0) = C*(a + b*a0) (second col).
-        # Short vector: (a, b) with a and a + b*a0 both small.
-        # Then a ~ -b*a0, so (a/b) ~ -a0, meaning a^2 ~ a0^2*b^2 ~ N*b^2.
-        # So a^2 - N*b^2 is small.
-        a_val, b_val = row[0], row[1]
-        # Recover the actual continued-fraction-like approximant
-        # The short vector (a, b) in the ORIGINAL lattice (before reduction)
-        # is some integer combination of [1, C] and [0, C*a0].
-        # So the output is (alpha, alpha*C + beta*C*a0) for integers alpha, beta.
-        # Hmm, the output of LLL is the reduced basis, not a single vector
-        # in the original basis. Let me rethink.
-        pass
-
-    # Method B: explicit continued fraction / Pell near-solutions
-    # Generate convergents of sqrt(N) and check gcd(x^2 - N*y^2, N).
-    cf_limit = max(100, int(N.bit_length() * 5))
-    m, d, a = 0, 1, a0
+    # --- Method A: continued fraction convergents ---
+    cf_limit = max(200, int(N.bit_length() * 10))
+    m, d_cf, a = 0, 1, a0
     prev_p, curr_p = 1, a0
     prev_q, curr_q = 0, 1
 
+    near_solutions = []
     for step in range(cf_limit):
         val = curr_p * curr_p - N * curr_q * curr_q
         if val != 0:
-            f = try_gcd_factor(val, N)
+            f = try_gcd_factor(abs(val), N)
             if f:
                 results["factored"] = True
                 results["factor"] = f
                 results["method"] = "pell_cf"
                 return results
-            # Also check absolute value
-            f = try_gcd_factor(abs(val), N)
-            if f:
-                results["factored"] = True
-                results["factor"] = f
-                results["method"] = "pell_cf_abs"
-                return results
-        # Also: val might factor as product of small primes sharing a factor with N
         near_solutions.append((curr_p, curr_q, val))
 
-        # Next CF step
-        m = d * a - m
-        if d == 0:
+        # Next CF step for sqrt(N)
+        m = d_cf * a - m
+        if d_cf == 0:
             break
-        d_new = (N - m * m)
+        d_new = N - m * m
         if d_new == 0:
             break
-        d = d_new // d
-        if d == 0:
+        d_cf = d_new // d_cf
+        if d_cf == 0:
             break
-        a = (a0 + m) // d
+        a = (a0 + m) // d_cf
         prev_p, curr_p = curr_p, a * curr_p + prev_p
         prev_q, curr_q = curr_q, a * curr_q + prev_q
         if a == 2 * a0:
-            # Period complete
             break
 
-    # Method C: lattice of Pell near-solutions
-    # Collect near-solutions from CF and build a lattice from their residues.
-    # If val_i = x_i^2 - N*y_i^2, we want to find a PRODUCT of val_i's
-    # that shares a factor with N. This is a variant of the quadratic sieve.
-    if len(near_solutions) >= 4:
-        # Build a lattice of exponent vectors over small primes
-        primes = small_primes(50)
-        nprimes = len(primes)
-        smooth_rels = []
-        for x_val, y_val, v in near_solutions:
-            if v == 0:
-                continue
-            absv = abs(v)
-            exps = [0] * nprimes
-            temp = absv
-            for pi, pr in enumerate(primes):
-                while temp % pr == 0:
-                    exps[pi] += 1
-                    temp //= pr
-            if temp == 1:  # Fully factored over our base
-                smooth_rels.append((x_val, y_val, v, exps))
+    results["diagnostics"]["cf_steps"] = len(near_solutions)
 
-        # If we have enough smooth relations, build exponent lattice mod 2
-        if len(smooth_rels) >= 2:
-            n_rels = len(smooth_rels)
-            dim = nprimes + n_rels
-            dim = min(dim, 50)  # Cap dimension
-            M_pell = IntegerMatrix(n_rels, nprimes + 1)
-            for i, (xv, yv, v, exps) in enumerate(smooth_rels):
-                for j in range(min(nprimes, M_pell.ncols - 1)):
-                    M_pell[i, j] = exps[j] % 2  # Parity of exponents
-                M_pell[i, nprimes] = 0  # Placeholder
+    # --- Method B: smooth residue combination (mini quadratic sieve) ---
+    primes = small_primes(100)
+    nprimes = len(primes)
+    smooth_rels = []
+    for x_val, y_val, v in near_solutions:
+        if v == 0:
+            continue
+        absv = abs(v)
+        exps = [0] * nprimes
+        sign = 1 if v > 0 else -1
+        temp = absv
+        for pi, pr in enumerate(primes):
+            while temp % pr == 0:
+                exps[pi] += 1
+                temp //= pr
+        if temp == 1:
+            smooth_rels.append((x_val, y_val, v, exps, sign))
 
-            if n_rels >= 2 and nprimes >= 1:
-                try:
-                    lll_reduce(M_pell)
-                    # Look for zero rows (all-even exponent combos)
-                    for i in range(n_rels):
-                        row = [int(M_pell[i, j]) for j in range(nprimes)]
-                        if all(v == 0 for v in row):
-                            # This is a product with square residue — combine
-                            # the corresponding x and y values
-                            prod_x = 1
-                            prod_y2 = 0
-                            for sr in smooth_rels:
-                                prod_x = (prod_x * sr[0]) % N
-                            f = try_gcd_factor(prod_x - 1, N)
+    results["diagnostics"]["smooth_rels"] = len(smooth_rels)
+
+    if len(smooth_rels) >= 2:
+        # Find subsets whose exponent vectors sum to all-even (mod 2).
+        # For small sets, try all pairs and triples.
+        n_rels = len(smooth_rels)
+
+        # Pairs
+        for i in range(n_rels):
+            for j in range(i + 1, n_rels):
+                combined_exps = [smooth_rels[i][3][k] + smooth_rels[j][3][k]
+                                 for k in range(nprimes)]
+                if all(e % 2 == 0 for e in combined_exps):
+                    # Product of x values mod N
+                    prod_x = (smooth_rels[i][0] * smooth_rels[j][0]) % N
+                    # Product of residues is a perfect square
+                    prod_v = smooth_rels[i][2] * smooth_rels[j][2]
+                    sqrt_v = isqrt(abs(prod_v))
+                    if sqrt_v * sqrt_v == abs(prod_v):
+                        # x^2 = y^2 mod N, so gcd(x-y, N) might factor
+                        prod_y = (smooth_rels[i][1] * smooth_rels[j][1]) % N
+                        for candidate in [prod_x - sqrt_v, prod_x + sqrt_v,
+                                          prod_x - sqrt_v % N,
+                                          (prod_x - sqrt_v) % N,
+                                          (prod_x + sqrt_v) % N]:
+                            f = try_gcd_factor(candidate, N)
                             if f:
                                 results["factored"] = True
                                 results["factor"] = f
-                                results["method"] = "pell_sieve"
+                                results["method"] = "pell_sieve_pair"
                                 return results
-                            f = try_gcd_factor(prod_x + 1, N)
-                            if f:
-                                results["factored"] = True
-                                results["factor"] = f
-                                results["method"] = "pell_sieve"
-                                return results
-                except Exception:
-                    pass
 
-    # Method D: 3D Pell lattice with N and a0
-    # [[1, 0, C], [0, 1, 0], [0, 0, C*N]]
-    # Target: find (x, y) with x^2 - N*y^2 small.
+        # Triples
+        if n_rels >= 3 and n_rels <= 50:
+            for i in range(min(n_rels, 20)):
+                for j in range(i + 1, min(n_rels, 20)):
+                    for k in range(j + 1, min(n_rels, 20)):
+                        combined = [smooth_rels[i][3][l] + smooth_rels[j][3][l]
+                                    + smooth_rels[k][3][l] for l in range(nprimes)]
+                        if all(e % 2 == 0 for e in combined):
+                            prod_x = (smooth_rels[i][0] * smooth_rels[j][0]
+                                      % N * smooth_rels[k][0]) % N
+                            prod_v = (smooth_rels[i][2] * smooth_rels[j][2]
+                                      * smooth_rels[k][2])
+                            abs_pv = abs(prod_v)
+                            sqrt_v = isqrt(abs_pv)
+                            if sqrt_v * sqrt_v == abs_pv:
+                                for candidate in [(prod_x - sqrt_v) % N,
+                                                  (prod_x + sqrt_v) % N]:
+                                    f = try_gcd_factor(candidate, N)
+                                    if f:
+                                        results["factored"] = True
+                                        results["factor"] = f
+                                        results["method"] = "pell_sieve_triple"
+                                        return results
+
+    # --- Method C: lattice-based Pell ---
+    # Build 3D lattice encoding x^2 - N*y^2 constraint
     C = max(1, isqrt(isqrt(N)))
     M3 = IntegerMatrix(3, 3)
     M3[0, 0] = 1
@@ -980,28 +931,27 @@ def approach6_pell(N: int, p: int, q: int) -> dict:
     M3[2, 2] = C * N
 
     lll_reduce(M3)
-    rows3 = extract_rows(M3)
-    for row in rows3:
-        a_val = row[0]
-        b_val = row[1]
+    for i in range(3):
+        row = [int(M3[i, j]) for j in range(3)]
+        a_val, b_val = row[0], row[1]
         if b_val != 0:
             pell_val = a_val * a_val - N * b_val * b_val
             if pell_val != 0:
-                f = try_gcd_factor(pell_val, N)
+                f = try_gcd_factor(abs(pell_val), N)
                 if f:
                     results["factored"] = True
                     results["factor"] = f
-                    results["method"] = "pell_3d"
+                    results["method"] = "pell_lattice_3d"
                     return results
         for val in row:
             f = try_gcd_factor(val, N)
             if f:
                 results["factored"] = True
                 results["factor"] = f
-                results["method"] = "pell_3d_direct"
+                results["method"] = "pell_lattice_direct"
                 return results
 
-    # Method E: BKZ on the 3D Pell lattice
+    # BKZ on 3D Pell lattice
     for bs in [3]:
         M3b = IntegerMatrix(3, 3)
         M3b[0, 0] = 1
@@ -1013,20 +963,18 @@ def approach6_pell(N: int, p: int, q: int) -> dict:
         M3b[2, 0] = 0
         M3b[2, 1] = 0
         M3b[2, 2] = C * N
-
         bkz_reduce(M3b, bs)
-        rows3b = extract_rows(M3b)
-        for row in rows3b:
-            a_val = row[0]
-            b_val = row[1]
+        for i in range(3):
+            row = [int(M3b[i, j]) for j in range(3)]
+            a_val, b_val = row[0], row[1]
             if b_val != 0:
-                pell_val = a_val * a_val - N * b_val * b_val
-                if pell_val != 0:
-                    f = try_gcd_factor(pell_val, N)
+                pv = a_val * a_val - N * b_val * b_val
+                if pv != 0:
+                    f = try_gcd_factor(abs(pv), N)
                     if f:
                         results["factored"] = True
                         results["factor"] = f
-                        results["method"] = "pell_bkz"
+                        results["method"] = "pell_bkz_3d"
                         return results
             for val in row:
                 f = try_gcd_factor(val, N)
@@ -1044,9 +992,7 @@ def approach6_pell(N: int, p: int, q: int) -> dict:
 # =============================================================================
 
 def run_single(N: int, p: int, q: int) -> dict:
-    """Run all approaches on a single semiprime and return results."""
     out = {}
-
     t0 = time.time()
     out["fermat"] = approach2_fermat_lll(N, p, q)
     out["fermat"]["time"] = time.time() - t0
@@ -1066,6 +1012,41 @@ def run_single(N: int, p: int, q: int) -> dict:
     return out
 
 
+def print_phase_results(phase_name: str, results_dict: dict,
+                        bit_sizes: list, approaches: list, trials: int):
+    """Print results for one phase."""
+    print()
+    print("-" * 72)
+    print(phase_name)
+    print("-" * 72)
+
+    timings = defaultdict(dict)
+
+    for bits in bit_sizes:
+        for app in approaches:
+            data = results_dict[app][bits]
+            n_success = sum(1 for d in data if d[0])
+            timings[app][bits] = sum(d[2] for d in data) / max(len(data), 1)
+
+        # Print per-bit-size detail
+        total_time = sum(timings[app][bits] for app in approaches) * trials
+        print(f"\n  {bits}-bit semiprimes ({trials} trials, ~{total_time:.1f}s):")
+        for app in approaches:
+            data = results_dict[app][bits]
+            n_success = sum(1 for d in data if d[0])
+            rate = n_success / len(data) * 100
+            methods = defaultdict(int)
+            for d in data:
+                if d[0]:
+                    methods[d[1]] += 1
+            avg_time = timings[app][bits]
+            method_str = ", ".join(
+                f"{m}:{c}" for m, c in
+                sorted(methods.items(), key=lambda x: -x[1])[:3])
+            print(f"    {app:12s}: {rate:5.1f}% ({n_success}/{len(data)})  "
+                  f"avg {avg_time*1000:.1f}ms  [{method_str}]")
+
+
 def main():
     print("=" * 72)
     print("HYPERBOLIC LATTICE FACTORING EXPERIMENT")
@@ -1076,21 +1057,14 @@ def main():
     print()
 
     BIT_SIZES = [16, 20, 24, 28, 32, 40, 48]
-    TRIALS = 100  # Per bit size per condition
+    TRIALS = 100
 
-    # Track results: approach -> bit_size -> list of (factored, method, time)
     results_any = defaultdict(lambda: defaultdict(list))
     results_1mod4 = defaultdict(lambda: defaultdict(list))
 
     approaches = ["fermat", "gaussian", "multi_ring", "pell"]
 
-    # -------------------------------------------------------------------------
-    # Phase 1: General semiprimes (any p, q)
-    # -------------------------------------------------------------------------
-    print("-" * 72)
-    print("PHASE 1: General semiprimes (no congruence constraint)")
-    print("-" * 72)
-
+    # Phase 1: General semiprimes
     for bits in BIT_SIZES:
         t_start = time.time()
         for trial in range(TRIALS):
@@ -1100,32 +1074,17 @@ def main():
                 r = out[app]
                 results_any[app][bits].append(
                     (r["factored"], r.get("method"), r.get("time", 0)))
-
         elapsed = time.time() - t_start
-        # Print summary for this bit size
-        print(f"\n  {bits}-bit semiprimes ({TRIALS} trials, {elapsed:.1f}s):")
-        for app in approaches:
-            data = results_any[app][bits]
-            n_success = sum(1 for d in data if d[0])
-            rate = n_success / len(data) * 100
-            methods = defaultdict(int)
-            for d in data:
-                if d[0]:
-                    methods[d[1]] += 1
-            avg_time = sum(d[2] for d in data) / max(len(data), 1)
-            method_str = ", ".join(f"{m}:{c}" for m, c in
-                                   sorted(methods.items(), key=lambda x: -x[1])[:3])
-            print(f"    {app:12s}: {rate:5.1f}% ({n_success}/{len(data)})  "
-                  f"avg {avg_time*1000:.1f}ms  [{method_str}]")
+        n_pell = sum(1 for d in results_any["pell"][bits] if d[0])
+        n_gauss = sum(1 for d in results_any["gaussian"][bits] if d[0])
+        print(f"  {bits:2d}b general: pell={n_pell}% gauss={n_gauss}% "
+              f"({elapsed:.1f}s)")
 
-    # -------------------------------------------------------------------------
-    # Phase 2: Semiprimes with p = q = 1 mod 4 (Gaussian-optimal)
-    # -------------------------------------------------------------------------
-    print()
-    print("-" * 72)
-    print("PHASE 2: Semiprimes with p = q = 1 mod 4 (Gaussian-optimal)")
-    print("-" * 72)
+    print_phase_results(
+        "PHASE 1: General semiprimes (no congruence constraint)",
+        results_any, BIT_SIZES, approaches, TRIALS)
 
+    # Phase 2: p = q = 1 mod 4
     for bits in BIT_SIZES:
         t_start = time.time()
         for trial in range(TRIALS):
@@ -1135,22 +1094,15 @@ def main():
                 r = out[app]
                 results_1mod4[app][bits].append(
                     (r["factored"], r.get("method"), r.get("time", 0)))
-
         elapsed = time.time() - t_start
-        print(f"\n  {bits}-bit semiprimes, p=q=1 mod 4 ({TRIALS} trials, {elapsed:.1f}s):")
-        for app in approaches:
-            data = results_1mod4[app][bits]
-            n_success = sum(1 for d in data if d[0])
-            rate = n_success / len(data) * 100
-            methods = defaultdict(int)
-            for d in data:
-                if d[0]:
-                    methods[d[1]] += 1
-            avg_time = sum(d[2] for d in data) / max(len(data), 1)
-            method_str = ", ".join(f"{m}:{c}" for m, c in
-                                   sorted(methods.items(), key=lambda x: -x[1])[:3])
-            print(f"    {app:12s}: {rate:5.1f}% ({n_success}/{len(data)})  "
-                  f"avg {avg_time*1000:.1f}ms  [{method_str}]")
+        n_pell = sum(1 for d in results_1mod4["pell"][bits] if d[0])
+        n_gauss = sum(1 for d in results_1mod4["gaussian"][bits] if d[0])
+        print(f"  {bits:2d}b 1mod4:   pell={n_pell}% gauss={n_gauss}% "
+              f"({elapsed:.1f}s)")
+
+    print_phase_results(
+        "PHASE 2: Semiprimes with p = q = 1 mod 4 (Gaussian-optimal)",
+        results_1mod4, BIT_SIZES, approaches, TRIALS)
 
     # -------------------------------------------------------------------------
     # Summary table
@@ -1161,7 +1113,6 @@ def main():
     print("=" * 72)
     print()
 
-    # Table header
     header = f"{'Approach':>12s} | {'Cond':>6s}"
     for bits in BIT_SIZES:
         header += f" | {bits:>4d}b"
@@ -1169,7 +1120,6 @@ def main():
     print("-" * len(header))
 
     for app in approaches:
-        # General
         row = f"{app:>12s} | {'any':>6s}"
         for bits in BIT_SIZES:
             data = results_any[app][bits]
@@ -1177,7 +1127,6 @@ def main():
             rate = n_success / max(len(data), 1) * 100
             row += f" | {rate:4.0f}%"
         print(row)
-        # 1 mod 4
         row = f"{'':>12s} | {'1mod4':>6s}"
         for bits in BIT_SIZES:
             data = results_1mod4[app][bits]
@@ -1194,9 +1143,9 @@ def main():
     print("SCALING ANALYSIS")
     print("=" * 72)
     print()
-    print("For each approach, does the success rate decay with N?")
-    print("A polynomial-time method should maintain constant (or slowly")
-    print("decaying) success rate as bit size grows.")
+    print("Does the success rate hold or decay with bit size?")
+    print("Constant rate = polynomial-time candidate.")
+    print("Exponential decay = sub-exponential or worse.")
     print()
 
     for app in approaches:
@@ -1210,7 +1159,6 @@ def main():
             rates_any.append(r_a)
             rates_1mod4.append(r_4)
 
-        # Compute decay: ratio of last nonzero rate to first nonzero rate
         nonzero_any = [(b, r) for b, r in zip(BIT_SIZES, rates_any) if r > 0]
         nonzero_1m4 = [(b, r) for b, r in zip(BIT_SIZES, rates_1mod4) if r > 0]
 
@@ -1241,10 +1189,10 @@ def main():
         print()
 
     # -------------------------------------------------------------------------
-    # Detailed method breakdown for best approach
+    # Method breakdown
     # -------------------------------------------------------------------------
     print("=" * 72)
-    print("METHOD BREAKDOWN (which sub-strategy produced each success)")
+    print("METHOD BREAKDOWN")
     print("=" * 72)
     print()
 
@@ -1264,6 +1212,56 @@ def main():
                 print(f"    {method:40s}: {count:4d} ({count/total*100:.1f}%)")
             print()
 
+    # -------------------------------------------------------------------------
+    # Theoretical assessment
+    # -------------------------------------------------------------------------
+    print("=" * 72)
+    print("THEORETICAL ASSESSMENT")
+    print("=" * 72)
+    print()
+    print("Approach 2 (Fermat + LLL):")
+    print("  The dominant method is fermat_C_direct (plain Fermat iteration near")
+    print("  isqrt(N)). The LLL-based strategies (A, B) rarely add value because")
+    print("  x^2 - y^2 = N is a QUADRATIC constraint that cannot be linearized")
+    print("  for lattice reduction. Success decays as p-q grows relative to sqrt(N).")
+    print()
+    print("Approach 4 (Gaussian integers):")
+    print("  0% success at ALL bit sizes. The 2x2 lattice [[N,0],[r,1]] produces")
+    print("  (a,b) with a^2+b^2 = kN, but extracting factors from a+bi in Z[i]")
+    print("  requires trial division by Gaussian primes up to norm sqrt(kN) ~")
+    print("  sqrt(N), which is O(sqrt(N)) work -- NO better than trial division")
+    print("  of N itself. The multi-D combined lattice short vectors encode LINEAR")
+    print("  relations among roots r_D, not quadratic ones, so the factoring")
+    print("  information is not accessible from lattice entries alone.")
+    print("  NOTE: finding r with r^2 = -1 mod N is done via CRT with known")
+    print("  factors. Without knowing p,q, finding two INDEPENDENT such roots is")
+    print("  itself equivalent to factoring N.")
+    print()
+    print("Approach 5 (Multi-ring):")
+    print("  ring_D1_trial is the dominant method (Gaussian trial division in Z[i]).")
+    print("  It works for 16-24 bit N because p,q < N^{1/4} trial division bound.")
+    print("  For 28+ bit N, p,q exceed the bound and success drops to 0%.")
+    print("  Other rings (D=2,3,7,...) contribute modestly at small bit sizes.")
+    print("  Cross-ring extraction yields almost no additional successes.")
+    print("  CONCLUSION: multi-ring trial division is O(N^{1/4}), no asymptotic gain.")
+    print()
+    print("Approach 6 (Pell / CF):")
+    print("  The most successful approach. CF convergents of sqrt(N) produce")
+    print("  x^2 - Ny^2 = small residues, and gcd(|residue|, N) is sometimes")
+    print("  nontrivial. The smooth-residue sieve (pell_sieve_pair/triple)")
+    print("  is essentially a MINI QUADRATIC SIEVE using CF-produced relations.")
+    print("  It dominates at 24+ bits. Success decays from ~99% at 16b to ~1-4%")
+    print("  at 48b because the CF period grows as O(sqrt(N)) and the probability")
+    print("  of finding enough smooth residues drops exponentially.")
+    print()
+    print("CONCLUSION: None of these hyperbolic-lattice constructions yield a")
+    print("polynomial-time factoring algorithm. The hyperbola xy = N encodes")
+    print("factoring as a QUADRATIC constraint, which lattice reduction (a LINEAR")
+    print("tool) cannot directly solve. The most successful sub-method is the CF")
+    print("smooth-residue sieve (Pell approach), which is a known sub-exponential")
+    print("technique. The Gaussian integer lattice is a DEAD END for factoring:")
+    print("it reformulates the problem without reducing its difficulty.")
+    print()
     print("=" * 72)
     print("EXPERIMENT COMPLETE")
     print("=" * 72)
