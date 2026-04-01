@@ -6,9 +6,11 @@ Run: python score.py              # score your entry
      python score.py --baselines  # also score baseline algorithms
      python score.py --quick      # fewer bit sizes
 
-ANTI-CHEAT: Test cases are generated with os.urandom at scoring time.
-Seeds are unpredictable — pre-computation is impossible.
-test.py uses deterministic seeds for development; score.py does not.
+ANTI-CHEAT:
+  1. Test cases generated with os.urandom (unpredictable)
+  2. Entry runs in 'spawn' subprocess (no forked memory — gc attack blocked)
+  3. Timing measured in PARENT process (time monkey-patch blocked)
+  4. Suspicion flag for impossibly fast results
 
 Do not modify this file.
 """
@@ -18,9 +20,16 @@ import os
 import time
 import math
 import argparse
-import random as _random
 import multiprocessing
 from sympy import nextprime, isprime
+import random as _random
+
+
+# ============================================================================
+# Force 'spawn' — child gets NO parent memory
+# ============================================================================
+
+_MP_CONTEXT = multiprocessing.get_context('spawn')
 
 
 # ============================================================================
@@ -36,19 +45,17 @@ SCORING_BIT_SIZES = [
 
 CASES_PER_SIZE = 5
 TIMEOUT_SECONDS = 60
-ALIVE_THRESHOLD = 3  # must solve at least 3/5 to be "alive"
+ALIVE_THRESHOLD = 3
 
 
 # ============================================================================
-# Secure test case generation (NOT importable by entry)
+# Secure test case generation
 # ============================================================================
 
 def _secure_semiprime(bits, rng):
-    """Generate a semiprime using a cryptographically seeded RNG."""
     half = bits // 2
     lo = 1 << (half - 1)
     hi = (1 << half) - 1
-
     for _ in range(1000):
         p = nextprime(rng.randint(lo, hi))
         if p > hi:
@@ -59,29 +66,20 @@ def _secure_semiprime(bits, rng):
         N = p * q
         if N.bit_length() >= bits - 1 and N.bit_length() <= bits + 1:
             return N, min(p, q), max(p, q)
-
     raise RuntimeError(f"Failed to generate {bits}-bit semiprime")
 
 
 def _generate_scoring_cases(bits, count):
-    """
-    Generate test cases with UNPREDICTABLE seeds.
-    Uses os.urandom — entry cannot predict these.
-    """
     seed = int.from_bytes(os.urandom(16), 'big')
     rng = _random.Random(seed)
-    cases = []
-    for _ in range(count):
-        cases.append(_secure_semiprime(bits, rng))
-    return cases
+    return [_secure_semiprime(bits, rng) for _ in range(count)]
 
 
 # ============================================================================
-# Validation (inline — not imported from interface.py to prevent entry access)
+# Validation
 # ============================================================================
 
 def _validate(N, result):
-    """Validate factorization result."""
     if result is None:
         return False
     if not isinstance(result, (tuple, list)) or len(result) != 2:
@@ -99,40 +97,52 @@ def _validate(N, result):
 
 
 # ============================================================================
-# Sandboxed execution
+# Sandboxed execution — spawn + parent-side timing
 # ============================================================================
 
-def _run_sandboxed(func, N, timeout):
+def _worker(entry_module_name, N, result_queue):
     """
-    Run factor(N) in a subprocess with timeout.
-    The subprocess only receives N — never the factors.
+    Runs in a SPAWNED subprocess. Fresh Python interpreter.
+    No access to parent heap. Only receives entry module name and N.
     """
-    result_queue = multiprocessing.Queue()
+    try:
+        mod = __import__(entry_module_name)
+        result = mod.factor(N)
+        result_queue.put(result)
+    except Exception as e:
+        result_queue.put(None)
 
-    def worker(q, fn, n):
-        try:
-            t0 = time.time()
-            r = fn(n)
-            elapsed = time.time() - t0
-            q.put((r, elapsed))
-        except Exception:
-            q.put((None, timeout))
 
-    proc = multiprocessing.Process(target=worker, args=(result_queue, func, N))
+def _run_sandboxed(entry_module_name, N, timeout):
+    """
+    Run factor(N) in a spawn'd subprocess.
+    Timing is measured HERE in the parent — child can't fake it.
+    """
+    result_queue = _MP_CONTEXT.Queue()
+
+    proc = _MP_CONTEXT.Process(
+        target=_worker,
+        args=(entry_module_name, N, result_queue),
+    )
+
+    t0 = time.monotonic()  # monotonic — immune to system clock changes
     proc.start()
-    proc.join(timeout=timeout + 1)
+    proc.join(timeout=timeout + 2)
+    elapsed = time.monotonic() - t0
 
     if proc.is_alive():
         proc.terminate()
-        proc.join(timeout=2)
+        proc.join(timeout=3)
         if proc.is_alive():
             proc.kill()
             proc.join()
         return None, timeout
 
     if not result_queue.empty():
-        return result_queue.get()
-    return None, timeout
+        result = result_queue.get_nowait()
+        return result, elapsed
+
+    return None, elapsed
 
 
 # ============================================================================
@@ -147,18 +157,14 @@ def _linreg(xs, ys):
     sy = sum(ys)
     sxy = sum(x * y for x, y in zip(xs, ys))
     sx2 = sum(x * x for x in xs)
-
     denom = n * sx2 - sx * sx
     if abs(denom) < 1e-15:
         return 0, 0, 0
-
     slope = (n * sxy - sx * sy) / denom
     intercept = (sy - slope * sx) / n
-
     ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys))
     ss_tot = sum((y - sy / n) ** 2 for y in ys)
     r2 = 1 - ss_res / ss_tot if ss_tot > 1e-15 else 0
-
     return slope, intercept, max(0, r2)
 
 
@@ -198,15 +204,12 @@ def _best_model(poly, exp, subexp):
 # Scoring
 # ============================================================================
 
-def score_algorithm(name, factor_fn, bit_sizes=None, quiet=False):
+def score_algorithm(name, entry_module_name, bit_sizes=None, quiet=False):
     if bit_sizes is None:
         bit_sizes = SCORING_BIT_SIZES
 
-    # Warmup
-    try:
-        factor_fn(15)
-    except Exception:
-        pass
+    # Warmup (absorb spawn overhead on first call)
+    _run_sandboxed(entry_module_name, 15, timeout=10)
 
     if not quiet:
         print(f"\n  Scoring: {name}")
@@ -222,21 +225,17 @@ def score_algorithm(name, factor_fn, bit_sizes=None, quiet=False):
         if not alive:
             break
 
-        # ANTI-CHEAT: fresh random cases every run
         cases = _generate_scoring_cases(bits, CASES_PER_SIZE)
         times = []
         solved = 0
 
         for N, p_true, q_true in cases:
-            # Entry only sees N
-            result, elapsed = _run_sandboxed(factor_fn, N, TIMEOUT_SECONDS)
+            result, elapsed = _run_sandboxed(entry_module_name, N, TIMEOUT_SECONDS)
 
             if result is not None and _validate(N, result) and elapsed <= TIMEOUT_SECONDS:
                 solved += 1
                 times.append(elapsed)
-
-                # Flag suspiciously fast results at large sizes
-                if bits >= 64 and elapsed < 0.001:
+                if bits >= 64 and elapsed < 0.05:
                     suspiciously_fast += 1
 
         median_t = sorted(times)[len(times) // 2] if times else float('inf')
@@ -265,16 +264,11 @@ def score_algorithm(name, factor_fn, bit_sizes=None, quiet=False):
     exp_fit = _fit_exponential(data_points)
     subexp_fit = _fit_subexponential(data_points)
     best_model = _best_model(poly_fit, exp_fit, subexp_fit)
-
     time_at_max = details.get(max_bits, {}).get('median_time', float('inf'))
 
-    # Suspicion check
-    flagged = False
-    if suspiciously_fast > CASES_PER_SIZE:
-        flagged = True
-        if not quiet:
-            print(f"\n  WARNING: {suspiciously_fast} factorizations completed in <1ms at 64+ bits.")
-            print(f"  This is faster than modular exponentiation — possible lookup table.")
+    flagged = suspiciously_fast > CASES_PER_SIZE
+    if not quiet and flagged:
+        print(f"\n  !! WARNING: {suspiciously_fast} solves in <50ms at 64+ bits — flagged")
 
     if not quiet and data_points:
         print(f"\n  Model fits (R² closer to 1.0 = better fit):")
@@ -325,57 +319,61 @@ def print_scoreboard(results):
               f"{k_str:>7} {rp:>7} {rs:>7} {t_str:>9} {flag:>5}{marker}")
 
     print(f"\n  Models: POLY=polynomial, EXP=exponential, SUBEXP=L[1/3] sub-exponential")
-    print(f"  !!  = flagged (suspiciously fast, possible lookup table)")
-    print(f"  *** = polynomial-time candidate (verify at 2048+ bits)")
-    print(f"\n  Anti-cheat: test cases generated with os.urandom at scoring time.")
-    print(f"  Pre-computation is impossible. Each run uses different semiprimes.")
-
-    for r in ranked:
-        if r['best_model'] == 'POLY' and r['max_bits'] >= 512 and r['poly_k'] < 20 and not r.get('flagged'):
-            print(f"\n  !!! {r['name']}: POLYNOMIAL TIME CANDIDATE !!!")
-            print(f"  !!! k = {r['poly_k']:.2f}, alive at {r['max_bits']} bits !!!")
-            print(f"  !!! Extend to 2048+ bits to confirm. !!!")
+    print(f"  !!  = flagged suspicious")
+    print(f"  *** = polynomial-time candidate")
+    print(f"\n  Anti-cheat: spawn isolation + parent timing + os.urandom seeds")
 
 
 def main():
     parser = argparse.ArgumentParser(description="FactorCup Scorer")
-    parser.add_argument('--baselines', action='store_true',
-                        help='Also score baseline algorithms')
-    parser.add_argument('--quick', action='store_true',
-                        help='Quick mode: fewer bit sizes')
+    parser.add_argument('--baselines', action='store_true')
+    parser.add_argument('--quick', action='store_true')
     args = parser.parse_args()
 
     print("=" * 78)
     print("  FactorCup Scorer")
-    print("  Anti-cheat: os.urandom seeds — every run uses fresh semiprimes")
+    print("  Anti-cheat: spawn isolation + parent timing + os.urandom seeds")
     print("=" * 78)
 
-    if args.quick:
-        bit_sizes = [32, 48, 64, 80, 96]
-    else:
-        bit_sizes = SCORING_BIT_SIZES
+    bit_sizes = [32, 48, 64, 80, 96] if args.quick else SCORING_BIT_SIZES
 
     results = []
 
+    # Score entry
     try:
-        import entry
-        result = score_algorithm("entry", entry.factor, bit_sizes)
+        result = score_algorithm("entry", "entry", bit_sizes)
         results.append(result)
-    except ImportError:
-        print("\nERROR: No entry.py found. Run test.py first.")
+    except Exception as e:
+        print(f"\nERROR loading entry: {e}")
         sys.exit(1)
 
     if args.baselines:
-        from baselines import trial_division, pollard_rho, quadratic_sieve
-        for name, fn in [
-            ("trial_division", trial_division),
-            ("pollard_rho", pollard_rho),
-            ("quadratic_sieve", quadratic_sieve),
-        ]:
-            result = score_algorithm(name, fn, bit_sizes)
-            results.append(result)
+        # Score baselines by creating temporary wrapper modules
+        _score_baseline(results, "trial_division", bit_sizes)
+        _score_baseline(results, "pollard_rho", bit_sizes)
+        _score_baseline(results, "quadratic_sieve", bit_sizes)
 
     print_scoreboard(results)
+
+
+def _score_baseline(results, name, bit_sizes):
+    """Score a baseline by dynamically creating a wrapper entry module."""
+    wrapper_code = f"""
+from baselines import {name}
+def factor(N):
+    return {name}(N)
+"""
+    wrapper_path = f"_baseline_{name}.py"
+    with open(wrapper_path, 'w') as f:
+        f.write(wrapper_code)
+    try:
+        result = score_algorithm(name, f"_baseline_{name}", bit_sizes)
+        results.append(result)
+    finally:
+        try:
+            os.remove(wrapper_path)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
