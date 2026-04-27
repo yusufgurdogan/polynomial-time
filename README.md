@@ -34,6 +34,18 @@ python score.py
 
 Current entry in this repo (`factorcup/entry.py`) reaches 160 bits via a tuned escalation pipeline (trial division, Pollard p-1 / Williams p+1, Pollard rho, MPQS, sympy ECM, plus orbit-lattice and Paillier-lift novel attempts).
 
+### Top 5 (verified)
+
+Scored by [`factorcup/score.py`](factorcup/score.py) across 38 standalone factoring functions in this repo. Full table: [`factorcup/LEADERBOARD.md`](factorcup/LEADERBOARD.md).
+
+| # | Algorithm | max_bits | model | time@max |
+|---|-----------|---------:|:-----:|---------:|
+| 1 | `entry` | 160 | EXP | 32.09s |
+| 2 | `k02_ultimate` | 128 | EXP | 19.30s |
+| 3 | `ecm_attack` | 112 | EXP | 2.68s |
+| 4 | `pollard_rho` | 96 | EXP | 5.07s |
+| 5 | `k01b_frobenius_walk` | 64 | POLY | 0.34s |
+
 ## The kill list
 
 Each numbered kill has a dedicated file in [`kills/`](kills/) named `kNN_topic.py`. Kills #1 through #11 were not numbered in the original commit messages (counting started at #12); they are renumbered chronologically here.
