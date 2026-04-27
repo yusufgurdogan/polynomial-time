@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Push the ultimate algorithm to find its breaking point."""
 
-import random, time, sys
+import os, random, time, sys
 sys.stdout.reconfigure(line_buffering=True)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kills'))
 random.seed(42)
 
 from harness import generate_semiprime, verify_factors
 from baselines import pollard_rho
 from creative import ecm_attack
-from novel2 import iterated_frobenius
-from ultimate import ultimate_factor
+from k01_novel2 import iterated_frobenius
+from k02_ultimate import ultimate_factor
 
 algorithms = {
     "pollard_rho": pollard_rho,

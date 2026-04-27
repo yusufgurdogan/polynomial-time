@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Test novel2 approaches — focused on Frobenius ring methods."""
 
-import random, time, sys
+import os, random, time, sys
 sys.stdout.reconfigure(line_buffering=True)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kills'))
 random.seed(42)
 
 from harness import generate_semiprime, verify_factors
 from baselines import pollard_rho
-from novel2 import (
+from k01_novel2 import (
     frobenius_walk,
     frobenius_systematic,
     iterated_frobenius,

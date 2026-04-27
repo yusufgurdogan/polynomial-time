@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Test the novel approaches against baselines."""
 
+import os
 import random
 import time
 import sys
 
 sys.stdout.reconfigure(line_buffering=True)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kills'))
 random.seed(42)
 
 from harness import generate_semiprime, verify_factors
 from baselines import pollard_rho
-from novel import (
+from k01_novel import (
     power_residue_attack,
     coppersmith_attack,
     character_matrix_attack,

@@ -36,17 +36,21 @@ Current entry in this repo (`factorcup/entry.py`) reaches 160 bits via a tuned e
 
 ## The kill list
 
-Each kill has a commit (run `git log --grep='kill #'` for the full set) and most have a dedicated file in [`kills/`](kills/).
+Each kill has a commit (run `git log --grep='kill #'` for the full set, or look for "KILLED" / "DEAD" in the early ones) and a dedicated file in [`kills/`](kills/). Files are named `kNN_topic.py` where NN is the kill number.
 
-Early phase (genus theorem and lattice obstructions, unnumbered):
-- **Direction A**: structured bases do not flip genus parity (87d350b)
-- **Direction B1**: no poly-time feature correlates with cycle position (f965220)
-- **Spectral scout**: vanishing signal is a finite-size artifact (d3b16ed)
-- **B2 biquadratic sweep**: success collapses, no property of m predicts success (f8423d2)
-- **BP on CRT factor graph**: belief propagation converges independent of N (05459c7)
-- **Genus geometry**: strong negative result (cdb663c)
+Kills #1 through #11 were not numbered in the original commit messages (the user started counting at #12). They are renumbered chronologically here.
 
-Numbered kills:
+- **#1** [Frobenius ring](kills/k01_novel.py) ([helper](kills/k01_novel2.py)): novel ring methods showed promise but no poly-time path (ebe267b)
+- **#2** [cyclotomic + ECM](kills/k02_ultimate.py): combined attack reaches 144 bits but is sub-exp, not poly (1d8015a)
+- **#3** [Coppersmith pipeline](kills/k03_coppersmith.py) ([algebraic](kills/k03_algebraic.py)): Coppersmith with algebraic enhancements, no breakthrough (5c008a9)
+- **#4** [Schoof mod N](kills/k04_schoof.py): Schoof's algorithm over composite, hits the same CRT-asymmetry wall (bc143cc)
+- **#5** [genus geometry](kills/k05_genus_geometry.py): strong negative result, foreshadows the genus hyperplane theorem (cdb663c)
+- **#6** [BP on CRT factor graph](kills/k06_bp_crt.py): belief propagation converges independent of N (05459c7)
+- **#7** [Direction A: structured bases](kills/k07_structured_bases.py): structured bases do not flip genus parity (87d350b)
+- **#8** [Direction B1: cycle position](kills/k08_infra_correlate.py): no poly-time feature correlates with cycle position (f965220)
+- **#9** [spectral scout](kills/k09_spectral_scout.py): vanishing signal is a finite-size artifact (d3b16ed)
+- **#10** [Direction B2: biquadratic](kills/k10_biquadratic.py): biquadratic lift WORKS but fades, the most interesting early result (6065109)
+- **#11** [B2 sweep](kills/k11_biquad_sweep.py): success rate collapses, no property of m predicts success (f8423d2)
 - **#12** [neural factoring](kills/k12_neural_factor.py): memorization, no generalization (0fda433)
 - **#13** [uncarrying](kills/k13_uncarry.py): carry-removal does not preserve factor info (7b766af)
 - **#14** [dual_sample](kills/k14_dual_sample.py): six classical L*/Z^d sampling strategies, all noise ratio 1.0 (39f2b45)
