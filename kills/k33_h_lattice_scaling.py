@@ -14,8 +14,8 @@ from sympy import nextprime
 sys.stdout.reconfigure(line_buffering=True)
 
 # Import from v2
-from h_lattice_v2 import (generate_semiprime, compute_H, try_factor_from_vector,
-                          primitive_root, discrete_log)
+from k33_h_lattice_v2 import (generate_semiprime, compute_H, try_factor_from_vector,
+                              primitive_root, discrete_log)
 
 from fpylll import IntegerMatrix, LLL
 

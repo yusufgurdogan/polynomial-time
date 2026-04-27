@@ -36,9 +36,9 @@ Current entry in this repo (`factorcup/entry.py`) reaches 160 bits via a tuned e
 
 ## The kill list
 
-Each kill is a commit. Run `git log --grep='kill #'` for the full set, or click through.
+Each kill has a commit (run `git log --grep='kill #'` for the full set) and most have a dedicated file in [`kills/`](kills/).
 
-Early phase (genus theorem and lattice obstructions):
+Early phase (genus theorem and lattice obstructions, unnumbered):
 - **Direction A**: structured bases do not flip genus parity (87d350b)
 - **Direction B1**: no poly-time feature correlates with cycle position (f965220)
 - **Spectral scout**: vanishing signal is a finite-size artifact (d3b16ed)
@@ -47,39 +47,42 @@ Early phase (genus theorem and lattice obstructions):
 - **Genus geometry**: strong negative result (cdb663c)
 
 Numbered kills:
-- **#12 #13**: uncarrying and neural factoring, both dead (7b766af)
-- **#14**: dual_sample, six classical strategies for L*/Z^d sampling all give noise ratio 1.0 (39f2b45)
-- **#15**: class_number, factoring pipeline works but is circular (39f2b45)
-- **#16**: soft Coppersmith, n/4-bit barrier universal across information types (39f2b45)
-- **#17**: partial Regev, smooth relations into noisy dual samples are genus-trapped (39f2b45)
-- **#18**: hyperbolic_lattice (Gaussian/Fermat/Pell), all decay to 0% (39f2b45)
-- **#19**: poly_factor_bridge, polynomial factoring vs integer factoring, no new structure (39f2b45)
-- **#20**: 10 back-to-basics simple ideas, all dead (2693817)
-- **#21**: L-function precision, the h·R route is dead (b2d68fe)
-- **#22**: ECM-Coppersmith bridge, works but same complexity as ECM (bebdaa8)
-- **#23**: gap geometry via three-distance theorem on mod-exp orbits (f7e7d97)
-- **#24**: continued fraction partial quotients, statistical signals but no factoring (375ac4c)
-- **#25**: carry propagation, midpoint carry grows linearly not uniquely (bf3365d)
-- **#26**: lattice recovery from classical orbit, works at 12 bits, dead by 28 (f1e3550)
-- **#27**: PCA on multi-base orbit, torus is not a plane (f1debfb)
-- **#28**: Fermat quotients in Z/N²Z, liftable rate 0% due to exponent problem (de50d6f)
-- **#29**: additive Jacobi matrix, Hadamard decomposition via spectral methods (6ef14e2)
-- **#30 #31**: GL₂ non-abelian traces and Harvey-style order-failure information (1f9c743)
-- **#32**: information scan, no poly-time function predicts p (8b0c470)
-- **#33**: H-lattice (Fermat-quotient lattice), bypasses genus but is worse than random (f500959)
-- **#34**: binomial AKS-discrepancy, birthday-class (af2994c)
-- **#35**: isogeny j-root-gcd via Φ₂(j, Y), real signal but sub-exp α ≈ 0.3 (74a71f9)
-- **#36**: Φ₂/Φ₃ cascade, correlated, no compounding (da61f77)
-- **#37**: division polynomial ψ₃, weaker than Φ₂ (30c407a)
-- **#38**: Miller-Rabin sqrt-of-1, requires Fermat liar so dead at scale (ed4a131)
+- **#12** [neural factoring](kills/k12_neural_factor.py): memorization, no generalization (0fda433)
+- **#13** [uncarrying](kills/k13_uncarry.py): carry-removal does not preserve factor info (7b766af)
+- **#14** [dual_sample](kills/k14_dual_sample.py): six classical L*/Z^d sampling strategies, all noise ratio 1.0 (39f2b45)
+- **#15** [class_number](kills/k15_class_number.py): factoring pipeline works but is circular (39f2b45)
+- **#16** [soft_coppersmith](kills/k16_soft_coppersmith.py): n/4-bit barrier universal across info types (39f2b45)
+- **#17** [partial_regev](kills/k17_partial_regev.py): smooth relations to noisy dual samples are genus-trapped (39f2b45)
+- **#18** [hyperbolic_lattice](kills/k18_hyperbolic_lattice.py): Gaussian/Fermat/Pell lattices, all decay to 0% (39f2b45)
+- **#19** [poly_factor_bridge](kills/k19_poly_factor_bridge.py): polynomial factoring vs integer factoring, no new structure (39f2b45)
+- **#20** [simple_ideas](kills/k20_simple_ideas.py): 10 back-to-basics approaches, all dead (2693817)
+- **#21** [l_function_precision](kills/k21_l_function_precision.py): h·R route dead (b2d68fe)
+- **#22** [ecm_coppersmith_bridge](kills/k22_ecm_coppersmith_bridge.py): works but same complexity as ECM (bebdaa8)
+- **#23** [gap_geometry](kills/k23_gap_geometry.py): three-distance theorem on mod-exp orbits (f7e7d97)
+- **#24** [cf_partial_quotients](kills/k24_cf_partial_quotients.py): statistical signals but no factoring (375ac4c)
+- **#25**: carry propagation, midpoint carry grows linearly not uniquely (bf3365d, embedded in modifications)
+- **#26** [lattice_recovery](kills/k26_lattice_recovery.py): works at 12 bits, dead by 28 (f1e3550)
+- **#27**: PCA on multi-base orbit, torus is not a plane (f1debfb, embedded in modifications)
+- **#28** [fermat_quotient](kills/k28_fermat_quotient.py): Z/N²Z liftable rate 0%, exponent problem (de50d6f)
+- **#29** [additive_jacobi](kills/k29_additive_jacobi.py): Hadamard decomposition via spectral methods (6ef14e2)
+- **#30** [nonabelian_trace](kills/k30_nonabelian_trace.py): GL₂ non-abelian traces (1f9c743)
+- **#31** [order_failure_info](kills/k31_order_failure_info.py): Harvey-style order-failure information (1f9c743)
+- **#32** [info_scan](kills/k32_info_scan.py): no poly-time function predicts p (8b0c470)
+- **#33** [h_lattice](kills/k33_h_lattice_v2.py) ([scaling](kills/k33_h_lattice_scaling.py)): Fermat-quotient lattice bypasses genus but is worse than random (f500959)
+- **#34** [binomial](kills/k34_binomial.py): AKS-discrepancy is birthday-class (af2994c)
+- **#35** [isogeny](kills/k35_isogeny.py) ([scaling](kills/k35_isogeny_scaling.py)): Φ₂(j, Y) GCD is real signal but sub-exp α ≈ 0.3 (74a71f9)
+- **#36** [modpoly_cascade](kills/k36_modpoly_cascade.py): Φ₂/Φ₃ correlated, no compounding (da61f77)
+- **#37** [division_poly](kills/k37_division_poly.py): ψ₃ weaker than Φ₂ (30c407a)
+- **#38** [miller_rabin](kills/k38_miller_rabin.py): MR sqrt-of-1 requires Fermat liar, dead at scale (ed4a131)
 
-The numbering is not always sequential because earlier exploration was not numbered consistently.
+The numbering is not always sequential because earlier exploration was not numbered consistently. Kills #25 and #27 were experiments embedded in modifications to existing files rather than dedicated new files.
 
 ## Repo navigation
 
 - `factorcup/`: the competition package, scorer, baselines, entry.
 - `paper_draft.md`, `genus_hyperplane_lemma.md`: the structural argument for why LLL on the multiplicative relation lattice cannot factor (the genus hyperplane obstruction).
-- Root `.py` files: each one is roughly a kill or a building block. `harness.py` is the shared runner. The numbered-kill files map to the commits above.
+- [`kills/`](kills/): every numbered kill that has a dedicated file, named `kNN_topic.py`. Run any of them directly (e.g., `python kills/k35_isogeny_scaling.py`).
+- Root `.py` files: shared infrastructure (`harness.py`, `baselines.py`, `run.py`) and earlier exploratory experiments that predate the kill numbering.
 - `quantum_microscope.py`, `quantum_viz.html`, `quantum_plot.svg`: visualizations of what Regev's quantum sampler produces, for intuition.
 
 If you want to read one thing, read [`paper_draft.md`](paper_draft.md). If you want to compete, go to [`factorcup/`](factorcup/).

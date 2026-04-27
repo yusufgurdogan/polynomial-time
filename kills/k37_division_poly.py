@@ -17,7 +17,7 @@ import math, random, sys, time
 from sympy import nextprime
 sys.stdout.reconfigure(line_buffering=True)
 
-from isogeny_experiment import (
+from k35_isogeny import (
     poly_mul, poly_divmod, poly_gcd, poly_pow_mod,
     FactorFound, generate_semiprime
 )

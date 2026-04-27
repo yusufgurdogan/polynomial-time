@@ -8,7 +8,7 @@ is polynomial. alpha ~ 0.33 is ECM-class. alpha ~ 0.5 is birthday.
 Budget: 200 j-tries per N; 30 instances per bit size; bit sizes 14..44.
 """
 import math, random, sys, time
-from isogeny_experiment import try_isogeny_factor, generate_semiprime
+from k35_isogeny import try_isogeny_factor, generate_semiprime
 sys.stdout.reconfigure(line_buffering=True)
 
 
