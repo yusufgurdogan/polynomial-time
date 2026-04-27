@@ -1,0 +1,1 @@
+{"name": "ecm_attack", "max_bits": 112, "poly_k": 1.2111225275292619, "poly_r2": 0.44353439566585284, "exp_r2": 0.5878122321484749, "subexp_r2": 0.5037505377740336, "best_model": "EXP", "time_at_max": 2.681403825059533, "flagged": false, "_runtime": 54.5640652179718}

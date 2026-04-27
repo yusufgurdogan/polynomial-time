@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 venv/
 .env
+.claude/
+factorcup/leaderboard_run.log
+factorcup/_wrappers/
+factorcup/_wrap_*.py

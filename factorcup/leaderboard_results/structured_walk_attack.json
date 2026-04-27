@@ -1,0 +1,1 @@
+{"name": "structured_walk_attack", "max_bits": 48, "poly_k": Infinity, "poly_r2": 0, "exp_r2": 0, "subexp_r2": 0, "best_model": "POLY", "time_at_max": 0.369946894235909, "flagged": false, "_runtime": 5.617631673812866}

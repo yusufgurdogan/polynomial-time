@@ -1,0 +1,1 @@
+{"name": "k01b_frobenius_walk", "max_bits": 64, "poly_k": 0.06595888577735393, "poly_r2": 0.12248662269044952, "exp_r2": 0.06596992007423375, "subexp_r2": 0.0971370776647601, "best_model": "POLY", "time_at_max": 0.3446290213614702, "flagged": false, "_runtime": 11.461570978164673}

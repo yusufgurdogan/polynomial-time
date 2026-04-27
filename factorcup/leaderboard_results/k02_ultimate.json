@@ -1,0 +1,1 @@
+{"name": "k02_ultimate", "max_bits": 128, "poly_k": 3.2011449559589926, "poly_r2": 0.8296248880477308, "exp_r2": 0.9193981834652397, "subexp_r2": 0.877223329589943, "best_model": "EXP", "time_at_max": 19.297822003252804, "flagged": false, "_runtime": 432.58124709129333}

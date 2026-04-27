@@ -1,0 +1,1 @@
+{"name": "spectral_attack", "max_bits": 48, "poly_k": Infinity, "poly_r2": 0, "exp_r2": 0, "subexp_r2": 0, "best_model": "POLY", "time_at_max": 0.3433075603097677, "flagged": false, "_runtime": 6.409760236740112}

@@ -1,0 +1,1 @@
+{"name": "modular_constraint_attack", "max_bits": 32, "poly_k": Infinity, "poly_r2": 0, "exp_r2": 0, "subexp_r2": 0, "best_model": "POLY", "time_at_max": 0.32768483087420464, "flagged": false, "_runtime": 3.756981134414673}

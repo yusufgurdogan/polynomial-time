@@ -1,0 +1,1 @@
+{"name": "pollard_rho", "max_bits": 96, "poly_k": 1.9903726111989761, "poly_r2": 0.5400862782886967, "exp_r2": 0.6792306208919117, "subexp_r2": 0.5989472625282095, "best_model": "EXP", "time_at_max": 5.071706416085362, "flagged": false, "_runtime": 353.1334230899811}

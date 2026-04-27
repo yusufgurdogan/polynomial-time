@@ -1,0 +1,1 @@
+{"name": "classical_period_attack", "max_bits": 32, "poly_k": Infinity, "poly_r2": 0, "exp_r2": 0, "subexp_r2": 0, "best_model": "POLY", "time_at_max": 0.3084181947633624, "flagged": false, "_runtime": 3.5767440795898438}
