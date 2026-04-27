@@ -40,7 +40,7 @@ $$\chi\left(\prod [\mathfrak{p}_i]^{e_i}\right) = (-1)^{\sum e_i \varepsilon_i}.
 
 **The genus hyperplane.**
 
-$$H_\chi = \left\{\mathbf{e} \in \mathbb{Z}^d : \sum_{i=1}^d e_i \varepsilon_i \equiv 0 \pmod{2}\right\}.$$
+$$H_\chi = \left\lbrace \mathbf{e} \in \mathbb{Z}^d : \sum_{i=1}^d e_i \varepsilon_i \equiv 0 \pmod{2} \right\rbrace.$$
 
 This is a sublattice of $\mathbb{Z}^d$ of index 2 (provided the genus character is non-trivial on the factor base, i.e., at least one $\varepsilon_i = 1$). We call a vector $\mathbf{e}$ *genus-even* if $\mathbf{e} \in H_\chi$ and *genus-odd* otherwise.
 
